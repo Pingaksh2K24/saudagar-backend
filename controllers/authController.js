@@ -10,12 +10,12 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const folder = req.body.folder || 'general';
     const uploadPath = `uploads/${folder}/`;
-    
+
     // Create directory if it doesn't exist
     if (!fs.existsSync(uploadPath)) {
       fs.mkdirSync(uploadPath, { recursive: true });
     }
-    
+
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
@@ -30,7 +30,7 @@ const upload = multer({
     const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
-    
+
     if (mimetype && extname) {
       return cb(null, true);
     } else {
@@ -41,28 +41,28 @@ const upload = multer({
 
 const registerUser = async (req, res) => {
   try {
-    const { full_name, mobile_number, role, email, password, created_by } = req.body;
-    
+    const { full_name, mobile_number, role, email, password, created_by, village, address } = req.body;
+
     if (!full_name || !mobile_number || !role || !email || !password || !created_by) {
       return res.status(400).json({ message: 'Full name, mobile number, role, email, password and created_by are required' });
     }
-    
+
     const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (userExists.rows.length > 0) {
       return res.status(400).json({ message: 'User already exists' });
     }
-    
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    
+
     const result = await pool.query(
-      'INSERT INTO users (full_name, mobile_number, role, email, password_hash, created_at, created_by) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6) RETURNING id, full_name, mobile_number, role, email, created_at, created_by',
-      [full_name, mobile_number, role, email, hashedPassword, created_by]
+      'INSERT INTO users (full_name, mobile_number, role, email, password_hash, village, address, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, $8) RETURNING id, full_name, mobile_number, role, email, village, address, created_at, created_by',
+      [full_name, mobile_number, role, email, hashedPassword, village, address, created_by]
     );
-    
+
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id }, 'your-secret-key', { expiresIn: '30d' });
-    
+
     res.status(201).json({
       message: 'User created successfully',
       user: {
@@ -71,6 +71,8 @@ const registerUser = async (req, res) => {
         mobile_number: user.mobile_number,
         role: user.role,
         email: user.email,
+        village: user.village,
+        address: user.address,
         created_at: user.created_at,
         created_by: user.created_by
       },
@@ -84,26 +86,26 @@ const registerUser = async (req, res) => {
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
-    
+
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
-    
+
     const result = await pool.query('SELECT id, full_name, email, password_hash, mobile_number, role FROM users WHERE email = $1', [email]);
-    
+
     if (result.rows.length === 0) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
-    
+
     const user = result.rows[0];
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
-    
+
     if (!isValidPassword) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
-    
+
     const token = jwt.sign({ id: user.id }, 'your-secret-key', { expiresIn: '30d' });
-    
+
     res.json({
       message: 'Login successful',
       user: {
@@ -129,6 +131,8 @@ const getAllUserList = async (req, res) => {
         email, 
         mobile_number, 
         role,
+        village,
+        address,
         COALESCE(status, 'Active') as status,
         created_at
       FROM users 
@@ -148,7 +152,7 @@ const getUserDetails = async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
-      'SELECT id, full_name, username, dob, gender_id, address, email, is_email_verified, phone, alternate_phone, is_phone_verified, role_id, department_id, status_id, profile_image, is_active, account_locked FROM users WHERE id = $1', 
+      'SELECT id, full_name, username, dob, gender_id, address, email, is_email_verified, phone, alternate_phone, is_phone_verified, role_id, department_id, status_id, profile_image, is_active, account_locked FROM users WHERE id = $1',
       [id]
     );
     if (result.rows.length === 0) {
@@ -165,7 +169,7 @@ const uploadFile = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
-    
+
     res.json({
       message: 'File uploaded successfully',
       filename: req.file.filename,
@@ -184,13 +188,13 @@ const getAllDropdowns = async (req, res) => {
     const rolesQuery = pool.query('SELECT id, name, is_active FROM roles ORDER BY name');
     const departmentsQuery = pool.query('SELECT id, name, is_active FROM departments ORDER BY name');
     const statusQuery = pool.query('SELECT id, name, is_active FROM status ORDER BY name');
-    
+
     const [roles, departments, status] = await Promise.all([
       rolesQuery,
       departmentsQuery,
       statusQuery
     ]);
-    
+
     res.json({
       roles: roles.rows,
       departments: departments.rows,
@@ -205,20 +209,20 @@ const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
     const deletedBy = req.user?.id || req.body.deleted_by;
-    
+
     if (!deletedBy) {
       return res.status(400).json({ message: 'deleted_by is required' });
     }
-    
+
     const result = await pool.query(
-      'UPDATE users SET deleted_at = CURRENT_TIMESTAMP, deleted_by = $1 WHERE id = $2 AND deleted_by IS NULL RETURNING id', 
+      'UPDATE users SET deleted_at = CURRENT_TIMESTAMP, deleted_by = $1 WHERE id = $2 AND deleted_by IS NULL RETURNING id',
       [deletedBy, id]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'User not found or already deleted' });
     }
-    
+
     res.json({ message: 'User deleted successfully', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete user error:', error);
@@ -237,28 +241,75 @@ const logoutUser = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, mobile_number, role, email, status } = req.body;
+    const { full_name, mobile_number, role, email, status, village, address } = req.body;
     
-    if (!full_name || !mobile_number || !role || !email || !status) {
-      return res.status(400).json({ message: 'All fields are required' });
+    // Validation
+    if (!full_name || !mobile_number || !role || !email) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Full name, mobile number, role and email are required' 
+      });
     }
-    
+
+    // Update user
     const result = await pool.query(
-      'UPDATE users SET full_name = $1, mobile_number = $2, role = $3, email = $4, status = $5, updated_at = CURRENT_TIMESTAMP, updated_by = $6 WHERE id = $7 RETURNING id, full_name, mobile_number, role, email, status, updated_at, updated_by',
-      [full_name, mobile_number, role, email, status, req.user.id, id]
+      `UPDATE users SET 
+        full_name = $1, 
+        mobile_number = $2, 
+        role = $3, 
+        email = $4, 
+        status = $5, 
+        village = $6, 
+        address = $7, 
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $8 AND deleted_by IS NULL 
+      RETURNING id, full_name, mobile_number, role, email, status, village, address`,
+      [full_name, mobile_number, role, email, status || 'active', village, address, id]
     );
     
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
     }
-    
+
     res.json({
+      success: true,
       message: 'User updated successfully',
       user: result.rows[0]
     });
+    
   } catch (error) {
+    console.error('UPDATE USER ERROR:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update user',
+      error: error.message 
+    });
+  }
+};
+
+const getVillageList = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id,
+        full_name as user_name,
+        village
+      FROM users 
+      WHERE deleted_by IS NULL AND village IS NOT NULL
+      ORDER BY village ASC, full_name ASC
+    `);
+    
+    res.json({
+      message: 'Village list fetched successfully',
+      users: result.rows
+    });
+  } catch (error) {
+    console.error('GET VILLAGE LIST ERROR:', error.message);
     res.status(500).json({ message: error.message });
   }
 };
 
-export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser };
+export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getVillageList };

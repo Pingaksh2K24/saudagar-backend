@@ -1,5 +1,5 @@
 {
-  "name": "udyog-sutra-backend",
+  "name": "saudagar-backend",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
@@ -10,16 +10,30 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.19.0",
     "mongoose": "^8.18.0",
     "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
     "pg": "^8.16.3",
-    "react-toastify": "^11.0.5"
+    "react-toastify": "^11.0.5",
+    "winston": "^3.18.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
-  }
+  },
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pingaksh2K24/saudagar-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Pingaksh2K24/saudagar-backend/issues"
+  },
+  "homepage": "https://github.com/Pingaksh2K24/saudagar-backend#readme"
 }

@@ -232,14 +232,9 @@ const getGameById = async (req, res) => {
         description,
         open_time,
         close_time,
-        open_number,
-        close_number,
-        winning_number,
-        result_number,
         status,
         min_bet_amount,
-        max_bet_amount,
-        result_declared_at
+        max_bet_amount
       FROM games 
       WHERE id = $1 AND deleted_by IS NULL
     `, [id]);
