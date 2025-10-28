@@ -478,4 +478,199 @@ const fetchBids = async (req, res) => {
   }
 };
 
-export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids };
+const fetchBidsWithVillage = async (req, res) => {
+  try {
+    console.log('=== FETCH BIDS WITH VILLAGE API CALLED ===');
+    console.log('Request Body:', req.body);
+    
+    const { 
+      pagination = {}, 
+      filters = {} 
+    } = req.body;
+    
+    const { 
+      page = 1, 
+      limit = 10 
+    } = pagination;
+    
+    const {
+      village,
+      game_result_id,
+      date = new Date().toISOString().split('T')[0], // Default to today
+      session_type,
+      status
+    } = filters;
+    
+    console.log('Pagination:', { page, limit });
+    console.log('Filters:', filters);
+    
+    const offset = (page - 1) * limit;
+    
+    let query = `
+      SELECT 
+        b.id,
+        b.user_id,
+        b.game_id,
+        b.game_result_id,
+        b.bid_type,
+        b.bid_number,
+        b.amount,
+        b.rate,
+        b.session_type,
+        b.bid_date,
+        b.status,
+        bt.display_name as bid_type_name,
+        g.game_name,
+        u.full_name,
+        u.village,
+        gr.open_result,
+        gr.close_result,
+        gr.winning_number
+      FROM bids b
+      JOIN bid_types bt ON b.bid_type::integer = bt.id
+      JOIN games g ON b.game_id = g.id
+      JOIN users u ON b.user_id = u.id
+      LEFT JOIN game_results gr ON b.game_result_id = gr.id
+      WHERE 1=1
+    `;
+    let params = [];
+    let paramCount = 0;
+    
+    // Add filters
+    if (village) {
+      paramCount++;
+      query += ` AND u.village = $${paramCount}`;
+      params.push(village);
+    }
+    
+    if (game_result_id) {
+      paramCount++;
+      query += ` AND b.game_result_id = $${paramCount}`;
+      params.push(game_result_id);
+    }
+    
+    if (date) {
+      paramCount++;
+      query += ` AND b.bid_date = $${paramCount}`;
+      params.push(date);
+    }
+    
+    if (session_type) {
+      paramCount++;
+      query += ` AND b.session_type = $${paramCount}`;
+      params.push(session_type);
+    }
+    
+    if (status) {
+      paramCount++;
+      query += ` AND b.status = $${paramCount}`;
+      params.push(status);
+    }
+    
+    // Count total records and sum amount
+    const countQuery = query.replace(
+      /SELECT[\s\S]*?FROM/,
+      'SELECT COUNT(*) as total, COALESCE(SUM(b.amount), 0) as total_amount FROM'
+    );
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+    const totalAmount = parseFloat(countResult.rows[0].total_amount);
+    
+    // Add pagination
+    paramCount++;
+    query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
+    params.push(limit);
+    
+    paramCount++;
+    query += ` OFFSET $${paramCount}`;
+    params.push(offset);
+    
+    const result = await pool.query(query, params);
+    
+    console.log('Final Query:', query);
+    console.log('Query Params:', params);
+    console.log('Total Records:', total);
+    console.log('Total Amount:', totalAmount);
+    console.log('Fetched Records:', result.rows.length);
+    
+    res.json({
+      message: 'Bids with village data fetched successfully',
+      data: {
+        bids: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: total,
+          total_pages: Math.ceil(total / limit),
+          total_amount: totalAmount,
+          has_next: page * limit < total,
+          has_prev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('FETCH BIDS WITH VILLAGE ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getUserBidsForMobile = async (req, res) => {
+  try {
+    console.log('=== GET USER BIDS FOR MOBILE API CALLED ===');
+    
+    const { user_id } = req.params;
+    const { page = 1, limit = 10 } = req.query;
+    
+    console.log('User ID:', user_id, 'Page:', page, 'Limit:', limit);
+    
+    const offset = (page - 1) * limit;
+    
+    let query = `
+      SELECT 
+        b.id,
+        b.user_id,
+        b.game_id,
+        b.game_result_id,
+        b.bid_type,
+        b.bid_number,
+        b.amount,
+        b.session_type,
+        b.created_at as created_date,
+        b.status,
+        g.game_name,
+        bt.display_name as bid_type_name
+      FROM bids b
+      JOIN games g ON b.game_id = g.id
+      JOIN bid_types bt ON b.bid_type::integer = bt.id
+      WHERE b.user_id = $1
+      ORDER BY b.created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+    
+    const result = await pool.query(query, [user_id, limit, offset]);
+    
+    // Simple check if more records exist
+    const hasMore = result.rows.length === parseInt(limit);
+    
+    console.log('Fetched Records:', result.rows.length);
+    console.log('Has More:', hasMore);
+    
+    res.json({
+      message: 'User bids fetched successfully',
+      data: {
+        bids: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          has_more: hasMore,
+          next_page: hasMore ? parseInt(page) + 1 : null
+        }
+      }
+    });
+  } catch (error) {
+    console.error('GET USER BIDS FOR MOBILE ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile };
