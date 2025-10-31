@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getPannaType } from '../utils/helper.js';
 
 // Process bids after result declaration
 const processBidsAfterResult = async (gameResult) => {
@@ -18,7 +19,15 @@ const processBidsAfterResult = async (gameResult) => {
       console.log('Processing OPEN session with result:', winning_number.toString());
       await updateBidsForSession(game_id, game_result_id, winning_number.toString(), 'Open');
     }
-
+    // Process Open Session Panna
+    if (open_result.toString() &&
+      open_result.toString() !== '' &&
+      open_result.toString() !== null &&
+      open_result.toString().length === 3
+    ) {
+      console.log('Processing OPEN session with result:', open_result.toString());
+      await updateBidsForSession(game_id, game_result_id, open_result.toString(), 'Open');
+    }
 
     // Process Close Session  
     if (winning_number.toString() &&
@@ -27,6 +36,14 @@ const processBidsAfterResult = async (gameResult) => {
       winning_number.toString().length === 2) {
       console.log('Processing CLOSE session with result:', winning_number.toString());
       await updateBidsForSession(game_id, game_result_id, winning_number.toString(), 'Close');
+    }
+    // Process Open Session Panna
+    if (close_result.toString() &&
+      close_result.toString() !== '' &&
+      close_result.toString() !== null &&
+      close_result.toString().length === 2) {
+      console.log('Processing CLOSE session with result:', close_result.toString());
+      await updateBidsForSession(game_id, game_result_id, close_result.toString(), 'Close');
     }
 
   } catch (error) {
@@ -39,37 +56,43 @@ const updateBidsForSession = async (gameId, gameResultId, winningNumber, session
     console.log('=== INSIDE updateBidsForSession ===');
     console.log('Params:', { gameId, gameResultId, winningNumber, sessionType });
 
-    // Determine bid type and actual winning number based on session and winning number
-    let bidTypeName;
-    let actualWinningNumber;
-
+    // Process different bid types based on session
     if (sessionType === 'Open') {
+      // Single digit for open session
       if (winningNumber.length === 1) {
-        bidTypeName = 'single_digit';
-        actualWinningNumber = winningNumber;
-        console.log('Single digit open session detected actualWinningNumber:', actualWinningNumber);
-      } else if (winningNumber.length === 2) {
-        bidTypeName = 'jodi_digit';
-        actualWinningNumber = winningNumber;
-      } else {
-        console.log('Invalid winning number for open session:', winningNumber);
-        return;
+        await processBidType(gameId, gameResultId, 'single_digit', winningNumber, sessionType);
+      }
+      // Panna types for open session (3-digit numbers)
+      else if (winningNumber.length === 3) {
+        let pannaType = getPannaType(winningNumber);
+        console.log('Determined Panna Type:', pannaType);
+        await processBidType(gameId, gameResultId, pannaType,winningNumber, sessionType);
       }
     } else if (sessionType === 'Close') {
+      // Single digit for close session (last digit)
       if (winningNumber.length === 2) {
-        bidTypeName = 'single_digit';
-        actualWinningNumber = winningNumber.charAt(1); // Last digit (4 from 34)
-      } else {
-        console.log('Invalid winning number for close session:', winningNumber);
-        return;
+        const closeDigit = winningNumber.charAt(1); // Last digit (4 from 34)
+        await processBidType(gameId, gameResultId, 'single_digit', closeDigit, sessionType);
+
+        // Jodi digit processing (full 2-digit number) - jodi bids placed in Open session
+        await processBidType(gameId, gameResultId, 'jodi_digit', winningNumber, 'Open');
       }
-    } else {
-      console.log('Invalid session type:', sessionType);
-      return;
+      // Panna types for close session (3-digit numbers)
+      else if (winningNumber.length === 3) {
+        let pannaType = getPannaType(winningNumber);
+        console.log('Determined Panna Type:', pannaType);
+        await processBidType(gameId, gameResultId, pannaType, resultNumber, sessionType);
+      }
     }
 
-    console.log('Bid type name:', bidTypeName);
+  } catch (error) {
+    console.error('UPDATE BIDS ERROR:', error.message);
+  }
+};
 
+const processBidType = async (gameId, gameResultId, bidTypeName, actualWinningNumber, sessionType) => {
+  try {
+    console.log('Processing bid type:', { bidTypeName, actualWinningNumber, sessionType });
     // Get bid_type_id from bid_types table
     const bidTypeResult = await pool.query(
       'SELECT id FROM bid_types WHERE LOWER(type_code) = $1',
@@ -85,13 +108,6 @@ const updateBidsForSession = async (gameId, gameResultId, winningNumber, session
 
     const bidTypeId = bidTypeResult.rows[0].id;
     console.log('Bid type ID:', bidTypeId);
-
-    // Check existing bids first
-    const existingBids = await pool.query(
-      'SELECT * FROM bids WHERE game_id = $1 AND game_result_id = $2 AND session_type = $3',
-      [gameId, gameResultId, sessionType]
-    );
-    console.log('Existing bids count:', existingBids.rows.length);
 
     // Update winning bids
     const updateResult = await pool.query(
@@ -125,13 +141,38 @@ const updateBidsForSession = async (gameId, gameResultId, winningNumber, session
       [gameId, gameResultId, bidTypeId, sessionType, actualWinningNumber]
     );
 
-    console.log(`Updated ${updateResult.rowCount} winning bids and ${loseResult.rowCount} losing bids for ${sessionType} session`);
+    console.log(`Updated ${updateResult.rowCount} winning bids and ${loseResult.rowCount} losing bids for ${bidTypeName} in ${sessionType} session`);
 
   }
   catch (error) {
     console.error('UPDATE BIDS ERROR:', error.message);
   }
 };
+
+// const processPannaBids = async (gameId, gameResultId, winningNumber, sessionType) => {
+//   try {
+//     console.log('Processing panna bids:', { winningNumber, sessionType });
+
+//     // Determine panna type based on digit repetition
+//     const digits = winningNumber.split('');
+//     const uniqueDigits = [...new Set(digits)];
+
+//     let pannaType;
+//     if (uniqueDigits.length === 1) {
+//       pannaType = 'triple_panna'; // All same digits (111, 222)
+//     } else if (uniqueDigits.length === 2) {
+//       pannaType = 'double_panna'; // Two same digits (112, 223)
+//     } else {
+//       pannaType = 'single_panna'; // All different digits (123, 456)
+//     }
+
+//     console.log('Panna type detected:', pannaType);
+//     await processBidType(gameId, gameResultId, pannaType, winningNumber, sessionType);
+
+//   } catch (error) {
+//     console.error('PROCESS PANNA BIDS ERROR:', error.message);
+//   }
+// };
 
 // Admin Panel APIs
 
@@ -336,7 +377,7 @@ const getTodayResults = async (req, res) => {
 const getTodayGameResults = async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    
+
     const result = await pool.query(`
       SELECT 
         gr.id,
@@ -348,7 +389,7 @@ const getTodayGameResults = async (req, res) => {
       WHERE gr.result_date = $1
       ORDER BY g.open_time ASC
     `, [today]);
-    
+
     res.json({
       message: 'Today game results fetched successfully',
       date: today,

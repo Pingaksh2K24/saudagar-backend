@@ -209,7 +209,7 @@ const getMyBids = async (req, res) => {
 const getBidTypes = async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, display_name FROM bid_types ORDER BY id'
+      'SELECT id, display_name, bid_code FROM bid_types where is_active=true ORDER BY id'
     );
     
     res.json({
@@ -673,4 +673,50 @@ const getUserBidsForMobile = async (req, res) => {
   }
 };
 
-export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile };
+const getBidRatesByGame = async (req, res) => {
+  try {
+    console.log('=== GET BID RATES BY GAME API CALLED ===');
+    const { game_id } = req.params;
+    
+    console.log('Game ID:', game_id);
+    
+    if (!game_id) {
+      return res.status(400).json({ message: 'Game ID is required' });
+    }
+    
+    const query = `
+      SELECT 
+        br.id,
+        br.game_id,
+        br.bid_type_id,
+        br.rate_per_rupee,
+        br.min_bid_amount,
+        br.max_bid_amount,
+        br.is_active,
+        g.game_name,
+        bt.display_name as bid_type_name
+      FROM bid_rates br
+      JOIN games g ON br.game_id = g.id
+      JOIN bid_types bt ON br.bid_type_id = bt.id
+      WHERE br.game_id = $1
+      ORDER BY br.bid_type_id
+    `;
+    
+    const result = await pool.query(query, [game_id]);
+    
+    console.log('Fetched Rates:', result.rows.length);
+    
+    res.json({
+      message: 'Bid rates fetched successfully',
+      data: {
+        game_id: parseInt(game_id),
+        rates: result.rows
+      }
+    });
+  } catch (error) {
+    console.error('GET BID RATES BY GAME ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame };

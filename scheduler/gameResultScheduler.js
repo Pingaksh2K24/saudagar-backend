@@ -28,14 +28,20 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
-// 🔹 Main scheduler logic
+// 🔹 Main scheduler logic - Create entries from tomorrow till month end
 async function createDailyGameResults() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const today = new Date();
-    const resultDate = today.toISOString().split("T")[0];
+    // Start from tomorrow (01/11/2025)
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    // Get month end date
+    const monthEnd = new Date(tomorrow.getFullYear(), tomorrow.getMonth() + 1, 0);
+    
+    logger.info(`Creating entries from ${tomorrow.toISOString().split('T')[0]} to ${monthEnd.toISOString().split('T')[0]}`);
 
     // Step 1️⃣ : Fetch all active games (not deleted)
     const { rows: activeGames } = await client.query(
@@ -48,48 +54,60 @@ async function createDailyGameResults() {
       return;
     }
 
-    // Step 2️⃣ : Loop through games and insert into game_results if not already inserted
-    for (const game of activeGames) {
-      const checkQuery = `
-        SELECT id FROM game_results
-        WHERE game_id = $1 AND result_date = $2
-      `;
-      const { rows: existing } = await client.query(checkQuery, [
-        game.id,
-        resultDate,
-      ]);
+    let totalEntriesCreated = 0;
 
-      if (existing.length > 0) {
+    // Step 2️⃣ : Loop through each date from tomorrow to month end
+    const currentDate = new Date(tomorrow);
+    while (currentDate <= monthEnd) {
+      const resultDate = currentDate.toISOString().split("T")[0];
+      
+      // Loop through games for this date
+      for (const game of activeGames) {
+        const checkQuery = `
+          SELECT id FROM game_results
+          WHERE game_id = $1 AND result_date = $2
+        `;
+        const { rows: existing } = await client.query(checkQuery, [
+          game.id,
+          resultDate,
+        ]);
+
+        if (existing.length > 0) {
+          logger.info(
+            `Result already exists for game_id=${game.id} (${game.game_name}) on ${resultDate}`
+          );
+          continue;
+        }
+
+        const insertQuery = `
+          INSERT INTO game_results (
+            game_id, result_date, created_at, created_by, updated_at
+          )
+          VALUES (
+            $1, $2, NOW(), $3, NULL
+          )
+          RETURNING id;
+        `;
+
+        const values = [
+          game.id,
+          resultDate,
+          "Scheduler"
+        ];
+
+        const res = await client.query(insertQuery, values);
+        totalEntriesCreated++;
         logger.info(
-          `Result already exists for game_id=${game.id} (${game.game_name}) on ${resultDate}`
+          `✅ Game result inserted for game_id=${game.id} (${game.game_name}) on ${resultDate} → result_id=${res.rows[0].id}`
         );
-        continue;
       }
-
-      const insertQuery = `
-        INSERT INTO game_results (
-          game_id, result_date, created_at, created_by, updated_at
-        )
-        VALUES (
-          $1, $2, NOW(), $3, NULL
-        )
-        RETURNING id;
-      `;
-
-      const values = [
-        game.id,
-        resultDate,
-        "Scheduler"
-      ];
-
-      const res = await client.query(insertQuery, values);
-      logger.info(
-        `✅ Game result inserted for game_id=${game.id} (${game.game_name}) → result_id=${res.rows[0].id}`
-      );
+      
+      // Move to next date
+      currentDate.setDate(currentDate.getDate() + 1);
     }
 
     await client.query("COMMIT");
-    logger.info(`🎯 Daily game results created for date ${resultDate}`);
+    logger.info(`🎯 Total ${totalEntriesCreated} game result entries created from tomorrow till month end`);
   } catch (err) {
     await client.query("ROLLBACK");
     logger.error("❌ Error creating daily game results:", err.message);
