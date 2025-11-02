@@ -308,13 +308,18 @@ const getAllBids = async (req, res) => {
       params.push(user_id);
     }
     
-    // Count total records
+    // Count total records and status counts
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
-      'SELECT COUNT(*) as total FROM'
+      `SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN b.status = 'won' THEN 1 END) as total_won,
+        COUNT(CASE WHEN b.status = 'lost' THEN 1 END) as total_lost,
+        COUNT(CASE WHEN b.status = 'submitted' THEN 1 END) as total_submitted
+      FROM`
     );
     const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].total);
+    const counts = countResult.rows[0];
     
     // Add pagination
     paramCount++;
@@ -334,9 +339,12 @@ const getAllBids = async (req, res) => {
         pagination: {
           current_page: parseInt(page),
           per_page: parseInt(limit),
-          total: total,
-          total_pages: Math.ceil(total / limit),
-          has_next: page * limit < total,
+          total: parseInt(counts.total),
+          total_pages: Math.ceil(counts.total / limit),
+          total_won: parseInt(counts.total_won),
+          total_lost: parseInt(counts.total_lost),
+          total_submitted: parseInt(counts.total_submitted),
+          has_next: page * limit < counts.total,
           has_prev: page > 1
         }
       }
@@ -383,6 +391,7 @@ const fetchBids = async (req, res) => {
         b.game_id,
         b.game_result_id,
         b.bid_type,
+        bt.display_name as bid_type_name,
         b.bid_number,
         b.amount,
         b.rate,
@@ -396,6 +405,7 @@ const fetchBids = async (req, res) => {
       FROM bids b
       JOIN games g ON b.game_id = g.id
       JOIN users u ON b.user_id = u.id
+      JOIN bid_types bt ON b.bid_type::integer = bt.id
       LEFT JOIN game_results gr ON b.game_result_id = gr.id
       WHERE 1=1
     `;
@@ -439,13 +449,18 @@ const fetchBids = async (req, res) => {
       params.push(user_id);
     }
     
-    // Count total records
+    // Count total records and status counts
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
-      'SELECT COUNT(*) as total FROM'
+      `SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN b.status = 'won' THEN 1 END) as total_won,
+        COUNT(CASE WHEN b.status = 'lost' THEN 1 END) as total_lost,
+        COUNT(CASE WHEN b.status = 'submitted' THEN 1 END) as total_submitted
+      FROM`
     );
     const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].total);
+    const counts = countResult.rows[0];
     
     // Add pagination
     paramCount++;
@@ -465,9 +480,12 @@ const fetchBids = async (req, res) => {
         pagination: {
           current_page: parseInt(page),
           per_page: parseInt(limit),
-          total: total,
-          total_pages: Math.ceil(total / limit),
-          has_next: page * limit < total,
+          total: parseInt(counts.total),
+          total_pages: Math.ceil(counts.total / limit),
+          total_won: parseInt(counts.total_won),
+          total_lost: parseInt(counts.total_lost),
+          total_submitted: parseInt(counts.total_submitted),
+          has_next: page * limit < counts.total,
           has_prev: page > 1
         }
       }
@@ -719,4 +737,396 @@ const getBidRatesByGame = async (req, res) => {
   }
 };
 
-export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame };
+const getDailyProfitLoss = async (req, res) => {
+  try {
+    console.log('=== GET DAILY PROFIT LOSS API CALLED ===');
+    
+    // Get last 7 days including today
+    const dates = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      dates.push(date.toISOString().split('T')[0]);
+    }
+    
+    console.log('Calculating for dates:', dates);
+    
+    const dailyData = [];
+    let totalSummary = {
+      total_bids: 0,
+      total_amount: 0,
+      total_winning_amount: 0,
+      profit_loss: 0
+    };
+    
+    for (const date of dates) {
+      // Get daily statistics
+      const dailyQuery = `
+        SELECT 
+          COUNT(*) as total_bids,
+          COALESCE(SUM(amount), 0) as total_amount,
+          COALESCE(SUM(CASE WHEN status = 'won' THEN total_payout ELSE 0 END), 0) as total_winning_amount
+        FROM bids 
+        WHERE bid_date = $1
+      `;
+      
+      const result = await pool.query(dailyQuery, [date]);
+      const dayData = result.rows[0];
+      
+      const totalBids = parseInt(dayData.total_bids);
+      const totalAmount = parseFloat(dayData.total_amount);
+      const totalWinningAmount = parseFloat(dayData.total_winning_amount);
+      const profitLoss = totalAmount - totalWinningAmount;
+      
+      // Add to daily array
+      dailyData.push({
+        date: date,
+        total_bids: totalBids,
+        total_amount: totalAmount,
+        total_winning_amount: totalWinningAmount,
+        profit_loss: profitLoss
+      });
+      
+      // Add to summary
+      totalSummary.total_bids += totalBids;
+      totalSummary.total_amount += totalAmount;
+      totalSummary.total_winning_amount += totalWinningAmount;
+      totalSummary.profit_loss += profitLoss;
+    }
+    
+    console.log('Daily data calculated:', dailyData.length, 'days');
+    console.log('Total summary:', totalSummary);
+    
+    res.json({
+      message: 'Daily profit loss data fetched successfully',
+      data: {
+        summary: {
+          period: '7 days',
+          start_date: dates[0],
+          end_date: dates[dates.length - 1],
+          total_bids: totalSummary.total_bids,
+          total_amount: totalSummary.total_amount,
+          total_winning_amount: totalSummary.total_winning_amount,
+          profit_loss: totalSummary.profit_loss
+        },
+        daily_data: dailyData
+      }
+    });
+  } catch (error) {
+    console.error('GET DAILY PROFIT LOSS ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getGameWiseEarning = async (req, res) => {
+  try {
+    console.log('=== GET GAME WISE EARNING API CALLED ===');
+    
+    const { date = new Date().toISOString().split('T')[0] } = req.query;
+    console.log('Calculating for date:', date);
+    
+    // Get game-wise statistics
+    const gameWiseQuery = `
+      SELECT 
+        g.id as game_id,
+        g.game_name,
+        COUNT(b.id) as total_bids,
+        COALESCE(SUM(b.amount), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount,
+        COUNT(CASE WHEN b.status = 'won' THEN 1 END) as total_wins
+      FROM games g
+      LEFT JOIN bids b ON g.id = b.game_id AND b.bid_date = $1
+      WHERE g.status = 'active' AND g.deleted_by IS NULL
+      GROUP BY g.id, g.game_name
+      ORDER BY g.game_name
+    `;
+    
+    const result = await pool.query(gameWiseQuery, [date]);
+    
+    const gameWiseData = [];
+    let summary = {
+      total_games: 0,
+      total_bids: 0,
+      total_amount: 0,
+      net_profit: 0,
+      total_loss: 0
+    };
+    
+    for (const row of result.rows) {
+      const totalBids = parseInt(row.total_bids);
+      const totalAmount = parseFloat(row.total_amount);
+      const totalWinningAmount = parseFloat(row.total_winning_amount);
+      const totalWins = parseInt(row.total_wins);
+      const profitLoss = totalAmount - totalWinningAmount;
+      const winPercentage = totalBids > 0 ? ((totalWins / totalBids) * 100).toFixed(2) : 0;
+      
+      // Only include games that have bids on this date
+      if (totalBids > 0) {
+        gameWiseData.push({
+          game_id: row.game_id,
+          game_name: row.game_name,
+          total_bids: totalBids,
+          total_amount: totalAmount,
+          total_wins: totalWins,
+          total_winning_amount: totalWinningAmount,
+          profit_loss: profitLoss,
+          win_percentage: parseFloat(winPercentage)
+        });
+        
+        // Add to summary
+        summary.total_games += 1;
+        summary.total_bids += totalBids;
+        summary.total_amount += totalAmount;
+        summary.net_profit += profitLoss;
+        
+        if (profitLoss < 0) {
+          summary.total_loss += Math.abs(profitLoss);
+        }
+      }
+    }
+    
+    console.log('Game-wise data calculated for', gameWiseData.length, 'games');
+    console.log('Summary:', summary);
+    
+    res.json({
+      message: 'Game-wise earning data fetched successfully',
+      data: {
+        date: date,
+        summary: {
+          total_games: summary.total_games,
+          total_bids: summary.total_bids,
+          total_amount: summary.total_amount,
+          net_profit: summary.net_profit,
+          total_loss: summary.total_loss
+        },
+        game_wise_data: gameWiseData
+      }
+    });
+  } catch (error) {
+    console.error('GET GAME WISE EARNING ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getUserPerformance = async (req, res) => {
+  try {
+    console.log('=== GET USER PERFORMANCE API CALLED ===');
+    
+    const { user_id } = req.params;
+    const { 
+      date_from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      date_to = new Date().toISOString().split('T')[0]
+    } = req.query;
+    
+    console.log('User ID:', user_id, 'Date Range:', date_from, 'to', date_to);
+    
+    // Overall performance
+    const overallQuery = `
+      SELECT 
+        COUNT(*) as total_bids,
+        COALESCE(SUM(amount), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN status = 'won' THEN total_payout ELSE 0 END), 0) as total_winning_amount,
+        COUNT(CASE WHEN status = 'won' THEN 1 END) as total_wins,
+        COUNT(CASE WHEN status = 'lost' THEN 1 END) as total_losses,
+        COUNT(CASE WHEN status = 'submitted' THEN 1 END) as pending_bids
+      FROM bids 
+      WHERE user_id = $1 AND bid_date BETWEEN $2 AND $3
+    `;
+    
+    const overallResult = await pool.query(overallQuery, [user_id, date_from, date_to]);
+    const overall = overallResult.rows[0];
+    
+    const totalBids = parseInt(overall.total_bids);
+    const totalAmount = parseFloat(overall.total_amount);
+    const totalWinningAmount = parseFloat(overall.total_winning_amount);
+    const netProfitLoss = totalWinningAmount - totalAmount;
+    const winRate = totalBids > 0 ? ((parseInt(overall.total_wins) / totalBids) * 100).toFixed(2) : 0;
+    
+    // Game-wise performance
+    const gameWiseQuery = `
+      SELECT 
+        g.id as game_id,
+        g.game_name,
+        COUNT(b.id) as total_bids,
+        COALESCE(SUM(b.amount), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount,
+        COUNT(CASE WHEN b.status = 'won' THEN 1 END) as total_wins
+      FROM bids b
+      JOIN games g ON b.game_id = g.id
+      WHERE b.user_id = $1 AND b.bid_date BETWEEN $2 AND $3
+      GROUP BY g.id, g.game_name
+      ORDER BY total_amount DESC
+    `;
+    
+    const gameWiseResult = await pool.query(gameWiseQuery, [user_id, date_from, date_to]);
+    
+    // Daily performance
+    const dailyQuery = `
+      SELECT 
+        bid_date,
+        COUNT(*) as total_bids,
+        COALESCE(SUM(amount), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN status = 'won' THEN total_payout ELSE 0 END), 0) as total_winning_amount,
+        COUNT(CASE WHEN status = 'won' THEN 1 END) as total_wins
+      FROM bids 
+      WHERE user_id = $1 AND bid_date BETWEEN $2 AND $3
+      GROUP BY bid_date
+      ORDER BY bid_date DESC
+    `;
+    
+    const dailyResult = await pool.query(dailyQuery, [user_id, date_from, date_to]);
+    
+    res.json({
+      message: 'User performance fetched successfully',
+      data: {
+        user_id: parseInt(user_id),
+        date_range: { from: date_from, to: date_to },
+        overall_performance: {
+          total_bids: totalBids,
+          total_amount: totalAmount,
+          total_winning_amount: totalWinningAmount,
+          net_profit_loss: netProfitLoss,
+          total_wins: parseInt(overall.total_wins),
+          total_losses: parseInt(overall.total_losses),
+          pending_bids: parseInt(overall.pending_bids),
+          win_rate: parseFloat(winRate)
+        },
+        game_wise_performance: gameWiseResult.rows.map(row => ({
+          game_id: row.game_id,
+          game_name: row.game_name,
+          total_bids: parseInt(row.total_bids),
+          total_amount: parseFloat(row.total_amount),
+          total_winning_amount: parseFloat(row.total_winning_amount),
+          net_profit_loss: parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
+          total_wins: parseInt(row.total_wins),
+          win_rate: parseInt(row.total_bids) > 0 ? ((parseInt(row.total_wins) / parseInt(row.total_bids)) * 100).toFixed(2) : 0
+        })),
+        daily_performance: dailyResult.rows.map(row => ({
+          date: row.bid_date,
+          total_bids: parseInt(row.total_bids),
+          total_amount: parseFloat(row.total_amount),
+          total_winning_amount: parseFloat(row.total_winning_amount),
+          net_profit_loss: parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
+          total_wins: parseInt(row.total_wins),
+          win_rate: parseInt(row.total_bids) > 0 ? ((parseInt(row.total_wins) / parseInt(row.total_bids)) * 100).toFixed(2) : 0
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('GET USER PERFORMANCE ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const getAgentPerformance = async (req, res) => {
+  try {
+    console.log('=== GET AGENT PERFORMANCE API CALLED ===');
+    
+    const { 
+      pagination = {}, 
+      filters = {} 
+    } = req.body;
+    
+    const { 
+      page = 1, 
+      limit = 10 
+    } = pagination;
+    
+    const {
+      date_from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      date_to = new Date().toISOString().split('T')[0]
+    } = filters;
+    
+    const offset = (page - 1) * limit;
+    
+    // Summary - Total agents and their overall performance
+    const summaryQuery = `
+      SELECT 
+        COUNT(DISTINCT u.id) as total_agents,
+        COUNT(b.id) as total_bids,
+        COALESCE(SUM(b.amount), 0) as total_bid_amount,
+        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount
+      FROM users u
+      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date BETWEEN $1 AND $2
+      WHERE u.role = 'agent'
+    `;
+    
+    const summaryResult = await pool.query(summaryQuery, [date_from, date_to]);
+    const summary = summaryResult.rows[0];
+    
+    // Agent-wise performance with pagination
+    const agentQuery = `
+      SELECT 
+        u.id as user_id,
+        u.full_name as agent_name,
+        COUNT(b.id) as total_bids,
+        COALESCE(SUM(b.amount), 0) as total_bid_amount,
+        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount,
+        MIN(b.bid_date) as first_bid_date,
+        MAX(b.bid_date) as last_bid_date
+      FROM users u
+      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date BETWEEN $1 AND $2
+      WHERE u.role = 'agent'
+      GROUP BY u.id, u.full_name
+      ORDER BY total_bid_amount DESC
+      LIMIT $3 OFFSET $4
+    `;
+    
+    const agentResult = await pool.query(agentQuery, [date_from, date_to, limit, offset]);
+    
+    // Count total agents for pagination
+    const countQuery = `
+      SELECT COUNT(DISTINCT u.id) as total
+      FROM users u
+      WHERE u.role = 'agent'
+    `;
+    const countResult = await pool.query(countQuery);
+    const totalAgents = parseInt(countResult.rows[0].total);
+    
+    // Process agent data
+    const agentList = agentResult.rows.map(agent => {
+      const totalBidAmount = parseFloat(agent.total_bid_amount);
+      const totalWinningAmount = parseFloat(agent.total_winning_amount);
+      const profitLoss = totalWinningAmount - totalBidAmount;
+      
+      return {
+        user_id: agent.user_id,
+        agent_name: agent.agent_name,
+        total_bids: parseInt(agent.total_bids),
+        total_bid_amount: totalBidAmount,
+        total_winning_amount: totalWinningAmount,
+        profit_loss: profitLoss,
+        first_bid_date: agent.first_bid_date,
+        last_bid_date: agent.last_bid_date
+      };
+    });
+    
+    res.json({
+      message: 'Agent performance fetched successfully',
+      data: {
+        summary: {
+          total_agents: parseInt(summary.total_agents),
+          total_bids: parseInt(summary.total_bids),
+          total_bid_amount: parseFloat(summary.total_bid_amount),
+          total_winning_amount: parseFloat(summary.total_winning_amount),
+          overall_profit_loss: parseFloat(summary.total_winning_amount) - parseFloat(summary.total_bid_amount),
+          date_range: { from: date_from, to: date_to }
+        },
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: totalAgents,
+          total_pages: Math.ceil(totalAgents / limit),
+          has_next: page * limit < totalAgents,
+          has_prev: page > 1
+        },
+        agent_list: agentList
+      }
+    });
+  } catch (error) {
+    console.error('GET AGENT PERFORMANCE ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame, getDailyProfitLoss, getGameWiseEarning, getUserPerformance, getAgentPerformance };

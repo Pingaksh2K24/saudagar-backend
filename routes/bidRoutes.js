@@ -1,5 +1,5 @@
 import express from 'express';
-import { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame } from '../controllers/bidController.js';
+import { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame, getDailyProfitLoss, getGameWiseEarning, getUserPerformance, getAgentPerformance } from '../controllers/bidController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -10,6 +10,10 @@ router.post('/fetch', protect, fetchBids);
 router.post('/fetch-admin-bids', protect, fetchBidsWithVillage);
 router.get('/user/:user_id/mobile', getUserBidsForMobile);
 router.get('/rates/game/:game_id', getBidRatesByGame);
+router.get('/daily-profit-loss', protect, getDailyProfitLoss);
+router.get('/game-wise-earning', protect, getGameWiseEarning);
+router.get('/user-performance/:user_id', protect, getUserPerformance);
+router.post('/agent-performance', protect, getAgentPerformance);
 router.get('/my-bids', protect, getMyBids);
 router.get('/all-bids', protect, getAllBids);
 router.get('/types', getBidTypes);

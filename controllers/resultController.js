@@ -11,18 +11,18 @@ const processBidsAfterResult = async (gameResult) => {
     console.log('Open Result:', open_result, 'Close Result:', close_result, 'Winning Number:', winning_number);
 
     // Process Open Session
-    if (winning_number.toString() &&
+    if (winning_number && winning_number.toString() &&
       winning_number.toString() !== '' &&
-      winning_number.toString() !== null &&
+      winning_number.toString() !== 'null' &&
       winning_number.toString().length === 1
     ) {
       console.log('Processing OPEN session with result:', winning_number.toString());
       await updateBidsForSession(game_id, game_result_id, winning_number.toString(), 'Open');
     }
     // Process Open Session Panna
-    if (open_result.toString() &&
+    if (open_result && open_result.toString() &&
       open_result.toString() !== '' &&
-      open_result.toString() !== null &&
+      open_result.toString() !== 'null' &&
       open_result.toString().length === 3
     ) {
       console.log('Processing OPEN session with result:', open_result.toString());
@@ -30,18 +30,18 @@ const processBidsAfterResult = async (gameResult) => {
     }
 
     // Process Close Session  
-    if (winning_number.toString() &&
+    if (winning_number && winning_number.toString() &&
       winning_number.toString() !== '' &&
-      winning_number.toString() !== null &&
+      winning_number.toString() !== 'null' &&
       winning_number.toString().length === 2) {
       console.log('Processing CLOSE session with result:', winning_number.toString());
       await updateBidsForSession(game_id, game_result_id, winning_number.toString(), 'Close');
     }
-    // Process Open Session Panna
-    if (close_result.toString() &&
+    // Process Close Session Panna
+    if (close_result && close_result.toString() &&
       close_result.toString() !== '' &&
-      close_result.toString() !== null &&
-      close_result.toString().length === 2) {
+      close_result.toString() !== 'null' &&
+      close_result.toString().length === 3) {
       console.log('Processing CLOSE session with result:', close_result.toString());
       await updateBidsForSession(game_id, game_result_id, close_result.toString(), 'Close');
     }
@@ -81,7 +81,7 @@ const updateBidsForSession = async (gameId, gameResultId, winningNumber, session
       else if (winningNumber.length === 3) {
         let pannaType = getPannaType(winningNumber);
         console.log('Determined Panna Type:', pannaType);
-        await processBidType(gameId, gameResultId, pannaType, resultNumber, sessionType);
+        await processBidType(gameId, gameResultId, pannaType, winningNumber, sessionType);
       }
     }
 
@@ -344,21 +344,22 @@ const getGameResultHistory = async (req, res) => {
 
 const getTodayResults = async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // Get today's date in Indian timezone
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
     const result = await pool.query(`
       SELECT 
         g.id as game_id,
         g.game_name,
-        g.open_time,
-        g.close_time,
+        TO_CHAR(g.open_time, 'HH24:MI') as open_time,
+        TO_CHAR(g.close_time, 'HH24:MI') as close_time,
         TO_CHAR(gr.result_date, 'YYYY-MM-DD') as result_date,
         gr.id as result_id,
         gr.open_result,
         gr.close_result,
         gr.winning_number
       FROM games g
-      LEFT JOIN game_results gr ON g.id = gr.game_id AND gr.result_date = $1
+      LEFT JOIN game_results gr ON g.id = gr.game_id AND DATE(gr.result_date) = DATE($1)
       WHERE g.deleted_by IS NULL AND g.status = 'active'
       ORDER BY g.open_time
     `, [today]);
@@ -401,11 +402,116 @@ const getTodayGameResults = async (req, res) => {
   }
 };
 
+const getAllResults = async (req, res) => {
+  try {
+    const { 
+      pagination = {}, 
+      filters = {} 
+    } = req.body;
+    
+    const { 
+      page = 1, 
+      limit = 20 
+    } = pagination;
+    
+    const {
+      game_id, 
+      date, 
+      status 
+    } = filters;
+    
+    const offset = (page - 1) * limit;
+    
+    // Get last 7 days date range (including today)
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); // 6 days ago + today = 7 days
+    const startDate = sevenDaysAgo.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    
+    let query = `
+      SELECT 
+        gr.id,
+        gr.game_id,
+        TO_CHAR(gr.result_date, 'YYYY-MM-DD') as result_date,
+        gr.open_result,
+        gr.close_result,
+        gr.winning_number,
+        gr.open_status,
+        gr.close_status,
+        gr.created_at,
+        g.game_name
+      FROM game_results gr
+      JOIN games g ON gr.game_id = g.id
+      WHERE gr.result_date >= $1 AND gr.result_date <= $2
+    `;
+    
+    let params = [startDate, today];
+    let paramCount = 2;
+    
+    // Add filters
+    if (game_id) {
+      paramCount++;
+      query += ` AND gr.game_id = $${paramCount}`;
+      params.push(game_id);
+    }
+    
+    if (date) {
+      paramCount++;
+      query += ` AND gr.result_date = $${paramCount}`;
+      params.push(date);
+    }
+    
+    if (status) {
+      paramCount++;
+      query += ` AND (gr.open_status = $${paramCount} OR gr.close_status = $${paramCount})`;
+      params.push(status);
+    }
+    
+    // Count total records
+    const countQuery = query.replace(
+      /SELECT[\s\S]*?FROM/,
+      'SELECT COUNT(*) as total FROM'
+    );
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+    
+    // Add pagination
+    paramCount++;
+    query += ` ORDER BY gr.result_date DESC, gr.created_at DESC LIMIT $${paramCount}`;
+    params.push(limit);
+    
+    paramCount++;
+    query += ` OFFSET $${paramCount}`;
+    params.push(offset);
+    
+    const result = await pool.query(query, params);
+    
+    res.json({
+      message: 'All results fetched successfully',
+      data: {
+        results: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: total,
+          total_pages: Math.ceil(total / limit),
+          has_next: page * limit < total,
+          has_prev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('GET ALL RESULTS ERROR:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export {
   declareResult,
   getGameResults,
   getGamesWithResults,
   getGameResultHistory,
   getTodayResults,
-  getTodayGameResults
+  getTodayGameResults,
+  getAllResults
 };

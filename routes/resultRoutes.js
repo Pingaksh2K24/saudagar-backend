@@ -5,7 +5,8 @@ import {
   getGamesWithResults, 
   getGameResultHistory,
   getTodayResults,
-  getTodayGameResults 
+  getTodayGameResults,
+  getAllResults 
 } from '../controllers/resultController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -20,5 +21,6 @@ router.get('/games-with-results', getGamesWithResults);
 router.get('/:gameId/history', getGameResultHistory);
 router.get('/today-results', getTodayResults);
 router.get('/today-game-results', getTodayGameResults);
+router.post('/all-results', getAllResults);
 
 export default router;
