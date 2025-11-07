@@ -1334,6 +1334,129 @@ const getAllReceipts = async (req, res) => {
   }
 };
 
+const getReceiptDetails = async (req, res) => {
+  try {
+    console.log('=== GET RECEIPT DETAILS API CALLED ===');
+    
+    const { receipt_id } = req.params;
+    
+    if (!receipt_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Receipt ID is required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Get receipt details
+    const receiptQuery = `
+      SELECT 
+        r.id,
+        r.receipt_no,
+        r.agent_id,
+        r.total_amount,
+        r.total_bids,
+        r.session,
+        r.receipt_date,
+        r.created_at,
+        u.full_name as agent_name,
+        u.mobile_number as agent_mobile
+      FROM receipts r
+      JOIN users u ON r.agent_id = u.id
+      WHERE r.id = $1
+    `;
+    
+    const receiptResult = await pool.query(receiptQuery, [receipt_id]);
+    
+    if (receiptResult.rows.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Receipt not found',
+        errors: {
+          field: 'receipt_id'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const receipt = receiptResult.rows[0];
+    
+    // Get all bids for this receipt
+    const bidsQuery = `
+      SELECT 
+        b.id as bid_id,
+        b.bid_number,
+        b.amount,
+        b.rate,
+        b.total_payout,
+        b.session_type,
+        b.status,
+        b.bid_date,
+        b.created_at,
+        g.game_name,
+        bt.display_name as bid_type_name,
+        u.full_name as user_name
+      FROM bids b
+      JOIN games g ON b.game_id = g.id
+      JOIN bid_types bt ON b.bid_type::integer = bt.id
+      JOIN users u ON b.user_id = u.id
+      WHERE b.receipt_id = $1
+      ORDER BY b.created_at ASC
+    `;
+    
+    const bidsResult = await pool.query(bidsQuery, [receipt_id]);
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Receipt details fetched successfully',
+      data: {
+        receipt_info: {
+          id: receipt.id,
+          receipt_no: receipt.receipt_no,
+          agent_id: receipt.agent_id,
+          agent_name: receipt.agent_name,
+          agent_mobile: receipt.agent_mobile,
+          total_amount: parseFloat(receipt.total_amount),
+          total_bids: parseInt(receipt.total_bids),
+          session: receipt.session,
+          receipt_date: receipt.receipt_date,
+          created_at: receipt.created_at
+        },
+        bids: bidsResult.rows.map(bid => ({
+          bid_id: bid.bid_id,
+          bid_number: bid.bid_number,
+          game_name: bid.game_name,
+          bid_type_name: bid.bid_type_name,
+          amount: parseFloat(bid.amount),
+          rate: parseFloat(bid.rate),
+          total_payout: parseFloat(bid.total_payout),
+          session_type: bid.session_type,
+          status: bid.status,
+          user_name: bid.user_name
+        }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GET RECEIPT DETAILS ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch receipt details',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
 const getReceiptByAgentId = async (req, res) => {
   try {
     console.log('=== GET RECEIPT BY AGENT ID API CALLED ===');
@@ -1781,4 +1904,5 @@ export {
   generateReceipt,
   getAllReceipts,
   getReceiptByAgentId,
+  getReceiptDetails,
 };
