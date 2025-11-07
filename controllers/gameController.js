@@ -18,12 +18,20 @@ const addGame = async (req, res) => {
     const createdBy = req.user?.id;
     
     console.log('Extracted fields:', {
-      game_name, open_time, close_time, createdBy
+      game_name, open_time, close_time, createdBy, description,status, min_bet_amount, max_bet_amount
     });
     
     if (!game_name || !open_time || !close_time) {
       console.log('Validation failed - missing required fields');
-      return res.status(400).json({ message: 'game_name, open_time and close_time are required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'game_name, open_time and close_time are required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     // Convert time to timestamp format (database expects TIMESTAMP)
@@ -63,15 +71,28 @@ const addGame = async (req, res) => {
     );
     
     console.log('Database insert successful:', result.rows[0]);
-    res.status(201).json({
+    res.status(200).json({
+      success: true,
+      statusCode: 201,
       message: 'Game added successfully',
-      game: result.rows[0]
+      data: {
+        game: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('=== ADD GAME ERROR ===');
     console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to add game',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -95,15 +116,29 @@ const getAllGames = async (req, res) => {
       ORDER BY created_at DESC
     `);
     console.log('Games fetched count:', result.rows.length);
-    console.log('Sample game data:', result.rows[0]);
-    res.json({
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Games fetched successfully',
-      games: result.rows
+      data: {
+        games: result.rows,
+        total_count: result.rows.length
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('=== GET ALL GAMES ERROR ===');
     console.error('Error message:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch games',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -128,7 +163,15 @@ const updateGame = async (req, res) => {
     
     if (!game_name || !open_time || !close_time) {
       console.log('Validation failed - missing required fields');
-      return res.status(400).json({ message: 'game_name, open_time and close_time are required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'game_name, open_time and close_time are required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     // Convert time to timestamp format
@@ -169,19 +212,40 @@ const updateGame = async (req, res) => {
     );
     
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Game not found or already deleted' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Game not found or already deleted',
+        errors: {
+          field: 'game_id'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     console.log('Database update successful:', result.rows[0]);
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Game updated successfully',
-      game: result.rows[0]
+      data: {
+        game: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('=== UPDATE GAME ERROR ===');
     console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to update game',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -195,7 +259,15 @@ const deleteGame = async (req, res) => {
     const deletedBy = req.user?.id;
     
     if (!deletedBy) {
-      return res.status(400).json({ message: 'Authentication required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 401,
+        message: 'Authentication required',
+        errors: {
+          field: 'authentication'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     console.log('Starting database delete...');
@@ -205,16 +277,40 @@ const deleteGame = async (req, res) => {
     );
     
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Game not found or already deleted' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Game not found or already deleted',
+        errors: {
+          field: 'game_id'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     console.log('Game deleted successfully:', result.rows[0].id);
-    res.json({ message: 'Game deleted successfully', id: result.rows[0].id });
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Game deleted successfully',
+      data: {
+        deleted_game_id: result.rows[0].id
+      },
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     console.error('=== DELETE GAME ERROR ===');
     console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to delete game',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -240,18 +336,39 @@ const getGameById = async (req, res) => {
     `, [id]);
     
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Game not found' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Game not found',
+        errors: {
+          field: 'game_id'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
     
     console.log('Game details fetched:', result.rows[0]);
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Game details fetched successfully',
-      game: result.rows[0]
+      data: {
+        game: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('=== GET GAME BY ID ERROR ===');
     console.error('Error message:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch game details',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 

@@ -3,59 +3,90 @@ import pool from '../config/db.js';
 const placeBids = async (req, res) => {
   try {
     console.log('=== PLACE BIDS API CALLED ===');
-    const { bids } = req.body;
+    const { bids, receipt } = req.body;
     const createdBy = req.user?.id;
-    
+
     if (!createdBy) {
       return res.status(401).json({ message: 'Authentication required' });
     }
-    
+
     if (!bids || !Array.isArray(bids) || bids.length === 0) {
       return res.status(400).json({ message: 'Bids array is required' });
     }
-    
+
+    if (!receipt || !receipt.receipt_id || !receipt.agent_id || !receipt.session || !receipt.receipt_date) {
+      return res.status(400).json({ message: 'Receipt object with receipt_id, agent_id, session, and receipt_date is required' });
+    }
+
+    // Validate session value
+    const validSessions = ['open', 'close'];
+    if (!validSessions.includes(receipt.session.toLowerCase())) {
+      return res.status(400).json({ message: 'Session must be either "open" or "close"' });
+    }
+
     // Validate each bid
     for (let i = 0; i < bids.length; i++) {
       const bid = bids[i];
-      const required = ['user_id', 'game_id', 'game_result_id', 'bid_type_id', 'bid_number', 'amount', 'session_type'];
-      
+      const required = [
+        'user_id',
+        'game_id',
+        'game_result_id',
+        'bid_type_id',
+        'bid_number',
+        'amount',
+        'session_type',
+      ];
+
       for (const field of required) {
         if (!bid[field]) {
-          return res.status(400).json({ 
-            message: `Bid ${i + 1}: ${field} is required` 
+          return res.status(400).json({
+            message: `Bid ${i + 1}: ${field} is required`,
           });
         }
       }
     }
-    
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      
+
+      // Insert receipt from provided data
+      const receiptResult = await client.query(
+        `INSERT INTO receipts (
+          receipt_no, agent_id, total_amount, total_bids, session, receipt_date, created_at, created_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7) 
+        RETURNING id, receipt_no`,
+        [receipt.receipt_id, receipt.agent_id, receipt.total_amount, receipt.total_bids, receipt.session.toLowerCase(), receipt.receipt_date, createdBy]
+      );
+
+      const receiptTableId = receiptResult.rows[0].id; // Auto-generated ID from receipts table
+      const receiptNumber = receiptResult.rows[0].receipt_no;
+
       const placedBids = [];
       const currentDate = new Date().toISOString().split('T')[0];
-      const currentTime = new Date().toTimeString().split(' ')[0];
-      
+
       for (const bid of bids) {
         // Fetch rate_per_rupee from bid_rates table
         const rateResult = await client.query(
           'SELECT rate_per_rupee FROM bid_rates WHERE game_id = $1 AND bid_type_id = $2',
           [bid.game_id, bid.bid_type_id]
         );
-        
+
         if (rateResult.rows.length === 0) {
-          throw new Error(`Rate not found for game_id: ${bid.game_id} and bid_type_id: ${bid.bid_type_id}`);
+          throw new Error(
+            `Rate not found for game_id: ${bid.game_id} and bid_type_id: ${bid.bid_type_id}`
+          );
         }
-        
+
         const rate = rateResult.rows[0].rate_per_rupee;
         const totalPayout = bid.amount * rate;
-        
+
         const result = await client.query(
           `INSERT INTO bids (
             user_id, game_id, game_result_id, bid_type, bid_number, 
             amount, rate, session_type, total_payout, bid_time, 
-            bid_date, status, created_at, created_by
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata'), $10, $11, CURRENT_TIMESTAMP, $12) 
+            bid_date, status, receipt_id, created_at, created_by
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata'), $10, $11, $12, CURRENT_TIMESTAMP, $13) 
           RETURNING *`,
           [
             bid.user_id,
@@ -69,27 +100,34 @@ const placeBids = async (req, res) => {
             totalPayout, // amount * rate
             currentDate, // bid_date
             'submitted', // status
-            createdBy
+            receiptTableId, // receipt_id (auto-generated ID from receipts table)
+            createdBy,
           ]
         );
-        
+
         placedBids.push(result.rows[0]);
       }
-      
+
       await client.query('COMMIT');
-      
+
       res.status(201).json({
         message: `${placedBids.length} bids placed successfully`,
-        bids: placedBids
+        receipt: {
+          id: receiptTableId,
+          receipt_no: receiptNumber,
+          total_amount: receipt.total_amount,
+          total_bids: receipt.total_bids,
+          session: receipt.session,
+          receipt_date: receipt.receipt_date
+        },
+        bids: placedBids,
       });
-      
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
-    
   } catch (error) {
     console.error('PLACE BIDS ERROR:', error.message);
     res.status(500).json({ message: error.message });
@@ -98,18 +136,18 @@ const placeBids = async (req, res) => {
 
 const getMyBids = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      date, 
-      game_id, 
-      session_type, 
-      status, 
-      bid_type 
+    const {
+      page = 1,
+      limit = 10,
+      date,
+      game_id,
+      session_type,
+      status,
+      bid_type,
     } = req.query;
-    
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         b.id,
@@ -135,38 +173,38 @@ const getMyBids = async (req, res) => {
     `;
     let params = [];
     let paramCount = 0;
-    
+
     // Add filters
     if (date) {
       paramCount++;
       query += ` AND b.bid_date = $${paramCount}`;
       params.push(date);
     }
-    
+
     if (game_id) {
       paramCount++;
       query += ` AND b.game_id = $${paramCount}`;
       params.push(game_id);
     }
-    
+
     if (session_type) {
       paramCount++;
       query += ` AND b.session_type = $${paramCount}`;
       params.push(session_type);
     }
-    
+
     if (status) {
       paramCount++;
       query += ` AND b.status = $${paramCount}`;
       params.push(status);
     }
-    
+
     if (bid_type) {
       paramCount++;
       query += ` AND b.bid_type = $${paramCount}`;
       params.push(bid_type);
     }
-    
+
     // Count total records
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
@@ -174,18 +212,18 @@ const getMyBids = async (req, res) => {
     );
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
-    
+
     // Add pagination
     paramCount++;
     query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
-    
+
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
-    
+
     const result = await pool.query(query, params);
-    
+
     res.json({
       message: 'Bids fetched successfully',
       data: {
@@ -196,9 +234,9 @@ const getMyBids = async (req, res) => {
           total: total,
           total_pages: Math.ceil(total / limit),
           has_next: page * limit < total,
-          has_prev: page > 1
-        }
-      }
+          has_prev: page > 1,
+        },
+      },
     });
   } catch (error) {
     console.error('GET MY BIDS ERROR:', error.message);
@@ -211,40 +249,40 @@ const getBidTypes = async (req, res) => {
     const result = await pool.query(
       'SELECT id, display_name, bid_code FROM bid_types where is_active=true ORDER BY id'
     );
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Bid types fetched successfully',
-      results: result.rows
+      data: {
+        results: result.rows,
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('GET BID TYPES ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch bid types',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
 const getAllBids = async (req, res) => {
   try {
-    const { 
-      pagination = {}, 
-      filters = {} 
-    } = req.body;
-    
-    const { 
-      page = 1, 
-      limit = 10 
-    } = pagination;
-    
-    const {
-      date,
-      game_id,
-      session_type,
-      status,
-      bid_type,
-      user_id
-    } = filters;
-    
+    const { pagination = {}, filters = {} } = req.body;
+
+    const { page = 1, limit = 10 } = pagination;
+
+    const { date, game_id, session_type, status, bid_type, user_id } = filters;
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         b.id,
@@ -270,44 +308,44 @@ const getAllBids = async (req, res) => {
     `;
     let params = [];
     let paramCount = 0;
-    
+
     // Add filters
     if (date) {
       paramCount++;
       query += ` AND b.bid_date = $${paramCount}`;
       params.push(date);
     }
-    
+
     if (game_id) {
       paramCount++;
       query += ` AND b.game_id = $${paramCount}`;
       params.push(game_id);
     }
-    
+
     if (session_type) {
       paramCount++;
       query += ` AND b.session_type = $${paramCount}`;
       params.push(session_type);
     }
-    
+
     if (status) {
       paramCount++;
       query += ` AND b.status = $${paramCount}`;
       params.push(status);
     }
-    
+
     if (bid_type) {
       paramCount++;
       query += ` AND b.bid_type = $${paramCount}`;
       params.push(bid_type);
     }
-    
+
     if (user_id) {
       paramCount++;
       query += ` AND b.user_id = $${paramCount}`;
       params.push(user_id);
     }
-    
+
     // Count total records and status counts
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
@@ -320,18 +358,18 @@ const getAllBids = async (req, res) => {
     );
     const countResult = await pool.query(countQuery, params);
     const counts = countResult.rows[0];
-    
+
     // Add pagination
     paramCount++;
     query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
-    
+
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
-    
+
     const result = await pool.query(query, params);
-    
+
     res.json({
       message: 'All bids fetched successfully',
       data: {
@@ -345,9 +383,9 @@ const getAllBids = async (req, res) => {
           total_lost: parseInt(counts.total_lost),
           total_submitted: parseInt(counts.total_submitted),
           has_next: page * limit < counts.total,
-          has_prev: page > 1
-        }
-      }
+          has_prev: page > 1,
+        },
+      },
     });
   } catch (error) {
     console.error('GET ALL BIDS ERROR:', error.message);
@@ -359,31 +397,18 @@ const fetchBids = async (req, res) => {
   try {
     console.log('=== FETCH BIDS API CALLED ===');
     console.log('Request Body:', req.body);
-    
-    const { 
-      pagination = {}, 
-      filters = {} 
-    } = req.body;
-    
-    const { 
-      page = 1, 
-      limit = 10 
-    } = pagination;
-    
-    const {
-      date,
-      game_id,
-      session_type,
-      status,
-      bid_type,
-      user_id
-    } = filters;
-    
+
+    const { pagination = {}, filters = {} } = req.body;
+
+    const { page = 1, limit = 10 } = pagination;
+
+    const { date, game_id, session_type, status, bid_type, user_id } = filters;
+
     console.log('Pagination:', { page, limit });
     console.log('Filters:', filters);
-    
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         b.id,
@@ -411,44 +436,44 @@ const fetchBids = async (req, res) => {
     `;
     let params = [];
     let paramCount = 0;
-    
+
     // Add filters
     if (date) {
       paramCount++;
       query += ` AND b.bid_date = $${paramCount}`;
       params.push(date);
     }
-    
+
     if (game_id) {
       paramCount++;
       query += ` AND b.game_id = $${paramCount}`;
       params.push(game_id);
     }
-    
+
     if (session_type) {
       paramCount++;
       query += ` AND b.session_type = $${paramCount}`;
       params.push(session_type);
     }
-    
+
     if (status) {
       paramCount++;
       query += ` AND b.status = $${paramCount}`;
       params.push(status);
     }
-    
+
     if (bid_type) {
       paramCount++;
       query += ` AND b.bid_type = $${paramCount}`;
       params.push(bid_type);
     }
-    
+
     if (user_id) {
       paramCount++;
       query += ` AND b.user_id = $${paramCount}`;
       params.push(user_id);
     }
-    
+
     // Count total records and status counts
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
@@ -461,19 +486,21 @@ const fetchBids = async (req, res) => {
     );
     const countResult = await pool.query(countQuery, params);
     const counts = countResult.rows[0];
-    
+
     // Add pagination
     paramCount++;
     query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
-    
+
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
-    
+
     const result = await pool.query(query, params);
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Bids fetched successfully',
       data: {
         bids: result.rows,
@@ -486,13 +513,22 @@ const fetchBids = async (req, res) => {
           total_lost: parseInt(counts.total_lost),
           total_submitted: parseInt(counts.total_submitted),
           has_next: page * limit < counts.total,
-          has_prev: page > 1
-        }
-      }
+          has_prev: page > 1,
+        },
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('FETCH BIDS ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch bids',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
@@ -500,30 +536,24 @@ const fetchBidsWithVillage = async (req, res) => {
   try {
     console.log('=== FETCH BIDS WITH VILLAGE API CALLED ===');
     console.log('Request Body:', req.body);
-    
-    const { 
-      pagination = {}, 
-      filters = {} 
-    } = req.body;
-    
-    const { 
-      page = 1, 
-      limit = 10 
-    } = pagination;
-    
+
+    const { pagination = {}, filters = {} } = req.body;
+
+    const { page = 1, limit = 10 } = pagination;
+
     const {
       village,
       game_result_id,
       date = new Date().toISOString().split('T')[0], // Default to today
       session_type,
-      status
+      status,
     } = filters;
-    
+
     console.log('Pagination:', { page, limit });
     console.log('Filters:', filters);
-    
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         b.id,
@@ -553,38 +583,38 @@ const fetchBidsWithVillage = async (req, res) => {
     `;
     let params = [];
     let paramCount = 0;
-    
+
     // Add filters
     if (village) {
       paramCount++;
       query += ` AND u.village = $${paramCount}`;
       params.push(village);
     }
-    
+
     if (game_result_id) {
       paramCount++;
       query += ` AND b.game_result_id = $${paramCount}`;
       params.push(game_result_id);
     }
-    
+
     if (date) {
       paramCount++;
       query += ` AND b.bid_date = $${paramCount}`;
       params.push(date);
     }
-    
+
     if (session_type) {
       paramCount++;
       query += ` AND b.session_type = $${paramCount}`;
       params.push(session_type);
     }
-    
+
     if (status) {
       paramCount++;
       query += ` AND b.status = $${paramCount}`;
       params.push(status);
     }
-    
+
     // Count total records and sum amount
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
@@ -593,25 +623,27 @@ const fetchBidsWithVillage = async (req, res) => {
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
     const totalAmount = parseFloat(countResult.rows[0].total_amount);
-    
+
     // Add pagination
     paramCount++;
     query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
-    
+
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
-    
+
     const result = await pool.query(query, params);
-    
+
     console.log('Final Query:', query);
     console.log('Query Params:', params);
     console.log('Total Records:', total);
     console.log('Total Amount:', totalAmount);
     console.log('Fetched Records:', result.rows.length);
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Bids with village data fetched successfully',
       data: {
         bids: result.rows,
@@ -622,27 +654,36 @@ const fetchBidsWithVillage = async (req, res) => {
           total_pages: Math.ceil(total / limit),
           total_amount: totalAmount,
           has_next: page * limit < total,
-          has_prev: page > 1
-        }
-      }
+          has_prev: page > 1,
+        },
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('FETCH BIDS WITH VILLAGE ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch bids with village data',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
 const getUserBidsForMobile = async (req, res) => {
   try {
     console.log('=== GET USER BIDS FOR MOBILE API CALLED ===');
-    
+
     const { user_id } = req.params;
     const { page = 1, limit = 10 } = req.query;
-    
+
     console.log('User ID:', user_id, 'Page:', page, 'Limit:', limit);
-    
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         b.id,
@@ -664,15 +705,15 @@ const getUserBidsForMobile = async (req, res) => {
       ORDER BY b.created_at DESC
       LIMIT $2 OFFSET $3
     `;
-    
+
     const result = await pool.query(query, [user_id, limit, offset]);
-    
+
     // Simple check if more records exist
     const hasMore = result.rows.length === parseInt(limit);
-    
+
     console.log('Fetched Records:', result.rows.length);
     console.log('Has More:', hasMore);
-    
+
     res.json({
       message: 'User bids fetched successfully',
       data: {
@@ -681,9 +722,9 @@ const getUserBidsForMobile = async (req, res) => {
           current_page: parseInt(page),
           per_page: parseInt(limit),
           has_more: hasMore,
-          next_page: hasMore ? parseInt(page) + 1 : null
-        }
-      }
+          next_page: hasMore ? parseInt(page) + 1 : null,
+        },
+      },
     });
   } catch (error) {
     console.error('GET USER BIDS FOR MOBILE ERROR:', error.message);
@@ -695,13 +736,21 @@ const getBidRatesByGame = async (req, res) => {
   try {
     console.log('=== GET BID RATES BY GAME API CALLED ===');
     const { game_id } = req.params;
-    
+
     console.log('Game ID:', game_id);
-    
+
     if (!game_id) {
-      return res.status(400).json({ message: 'Game ID is required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Game ID is required',
+        errors: {
+          field: 'validation',
+        },
+        timestamp: new Date().toISOString(),
+      });
     }
-    
+
     const query = `
       SELECT 
         br.id,
@@ -719,28 +768,39 @@ const getBidRatesByGame = async (req, res) => {
       WHERE br.game_id = $1
       ORDER BY br.bid_type_id
     `;
-    
+
     const result = await pool.query(query, [game_id]);
-    
+
     console.log('Fetched Rates:', result.rows.length);
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Bid rates fetched successfully',
       data: {
         game_id: parseInt(game_id),
-        rates: result.rows
-      }
+        rates: result.rows,
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('GET BID RATES BY GAME ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch bid rates',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
 const getDailyProfitLoss = async (req, res) => {
   try {
     console.log('=== GET DAILY PROFIT LOSS API CALLED ===');
-    
+
     // Get last 7 days including today
     const dates = [];
     for (let i = 6; i >= 0; i--) {
@@ -748,17 +808,17 @@ const getDailyProfitLoss = async (req, res) => {
       date.setDate(date.getDate() - i);
       dates.push(date.toISOString().split('T')[0]);
     }
-    
+
     console.log('Calculating for dates:', dates);
-    
+
     const dailyData = [];
     let totalSummary = {
       total_bids: 0,
       total_amount: 0,
       total_winning_amount: 0,
-      profit_loss: 0
+      profit_loss: 0,
     };
-    
+
     for (const date of dates) {
       // Get daily statistics
       const dailyQuery = `
@@ -769,35 +829,37 @@ const getDailyProfitLoss = async (req, res) => {
         FROM bids 
         WHERE bid_date = $1
       `;
-      
+
       const result = await pool.query(dailyQuery, [date]);
       const dayData = result.rows[0];
-      
+
       const totalBids = parseInt(dayData.total_bids);
       const totalAmount = parseFloat(dayData.total_amount);
       const totalWinningAmount = parseFloat(dayData.total_winning_amount);
       const profitLoss = totalAmount - totalWinningAmount;
-      
+
       // Add to daily array
       dailyData.push({
         date: date,
         total_bids: totalBids,
         total_amount: totalAmount,
         total_winning_amount: totalWinningAmount,
-        profit_loss: profitLoss
+        profit_loss: profitLoss,
       });
-      
+
       // Add to summary
       totalSummary.total_bids += totalBids;
       totalSummary.total_amount += totalAmount;
       totalSummary.total_winning_amount += totalWinningAmount;
       totalSummary.profit_loss += profitLoss;
     }
-    
+
     console.log('Daily data calculated:', dailyData.length, 'days');
     console.log('Total summary:', totalSummary);
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Daily profit loss data fetched successfully',
       data: {
         summary: {
@@ -807,24 +869,33 @@ const getDailyProfitLoss = async (req, res) => {
           total_bids: totalSummary.total_bids,
           total_amount: totalSummary.total_amount,
           total_winning_amount: totalSummary.total_winning_amount,
-          profit_loss: totalSummary.profit_loss
+          profit_loss: totalSummary.profit_loss,
         },
-        daily_data: dailyData
-      }
+        daily_data: dailyData,
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('GET DAILY PROFIT LOSS ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch daily profit loss data',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
 const getGameWiseEarning = async (req, res) => {
   try {
     console.log('=== GET GAME WISE EARNING API CALLED ===');
-    
+
     const { date = new Date().toISOString().split('T')[0] } = req.query;
     console.log('Calculating for date:', date);
-    
+
     // Get game-wise statistics
     const gameWiseQuery = `
       SELECT 
@@ -840,26 +911,27 @@ const getGameWiseEarning = async (req, res) => {
       GROUP BY g.id, g.game_name
       ORDER BY g.game_name
     `;
-    
+
     const result = await pool.query(gameWiseQuery, [date]);
-    
+
     const gameWiseData = [];
     let summary = {
       total_games: 0,
       total_bids: 0,
       total_amount: 0,
       net_profit: 0,
-      total_loss: 0
+      total_loss: 0,
     };
-    
+
     for (const row of result.rows) {
       const totalBids = parseInt(row.total_bids);
       const totalAmount = parseFloat(row.total_amount);
       const totalWinningAmount = parseFloat(row.total_winning_amount);
       const totalWins = parseInt(row.total_wins);
       const profitLoss = totalAmount - totalWinningAmount;
-      const winPercentage = totalBids > 0 ? ((totalWins / totalBids) * 100).toFixed(2) : 0;
-      
+      const winPercentage =
+        totalBids > 0 ? ((profitLoss / totalAmount) * 100).toFixed(2) : 0;
+
       // Only include games that have bids on this date
       if (totalBids > 0) {
         gameWiseData.push({
@@ -870,25 +942,27 @@ const getGameWiseEarning = async (req, res) => {
           total_wins: totalWins,
           total_winning_amount: totalWinningAmount,
           profit_loss: profitLoss,
-          win_percentage: parseFloat(winPercentage)
+          win_percentage: parseFloat(winPercentage),
         });
-        
+
         // Add to summary
         summary.total_games += 1;
         summary.total_bids += totalBids;
         summary.total_amount += totalAmount;
         summary.net_profit += profitLoss;
-        
+
         if (profitLoss < 0) {
           summary.total_loss += Math.abs(profitLoss);
         }
       }
     }
-    
+
     console.log('Game-wise data calculated for', gameWiseData.length, 'games');
     console.log('Summary:', summary);
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Game-wise earning data fetched successfully',
       data: {
         date: date,
@@ -897,29 +971,40 @@ const getGameWiseEarning = async (req, res) => {
           total_bids: summary.total_bids,
           total_amount: summary.total_amount,
           net_profit: summary.net_profit,
-          total_loss: summary.total_loss
+          total_loss: summary.total_loss,
         },
-        game_wise_data: gameWiseData
-      }
+        game_wise_data: gameWiseData,
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('GET GAME WISE EARNING ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch game-wise earning data',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
 const getUserPerformance = async (req, res) => {
   try {
     console.log('=== GET USER PERFORMANCE API CALLED ===');
-    
+
     const { user_id } = req.params;
-    const { 
-      date_from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      date_to = new Date().toISOString().split('T')[0]
+    const {
+      date_from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split('T')[0],
+      date_to = new Date().toISOString().split('T')[0],
     } = req.query;
-    
+
     console.log('User ID:', user_id, 'Date Range:', date_from, 'to', date_to);
-    
+
     // Overall performance
     const overallQuery = `
       SELECT 
@@ -932,16 +1017,23 @@ const getUserPerformance = async (req, res) => {
       FROM bids 
       WHERE user_id = $1 AND bid_date BETWEEN $2 AND $3
     `;
-    
-    const overallResult = await pool.query(overallQuery, [user_id, date_from, date_to]);
+
+    const overallResult = await pool.query(overallQuery, [
+      user_id,
+      date_from,
+      date_to,
+    ]);
     const overall = overallResult.rows[0];
-    
+
     const totalBids = parseInt(overall.total_bids);
     const totalAmount = parseFloat(overall.total_amount);
     const totalWinningAmount = parseFloat(overall.total_winning_amount);
     const netProfitLoss = totalWinningAmount - totalAmount;
-    const winRate = totalBids > 0 ? ((parseInt(overall.total_wins) / totalBids) * 100).toFixed(2) : 0;
-    
+    const winRate =
+      totalBids > 0
+        ? ((parseInt(overall.total_wins) / totalBids) * 100).toFixed(2)
+        : 0;
+
     // Game-wise performance
     const gameWiseQuery = `
       SELECT 
@@ -957,9 +1049,13 @@ const getUserPerformance = async (req, res) => {
       GROUP BY g.id, g.game_name
       ORDER BY total_amount DESC
     `;
-    
-    const gameWiseResult = await pool.query(gameWiseQuery, [user_id, date_from, date_to]);
-    
+
+    const gameWiseResult = await pool.query(gameWiseQuery, [
+      user_id,
+      date_from,
+      date_to,
+    ]);
+
     // Daily performance
     const dailyQuery = `
       SELECT 
@@ -973,9 +1069,13 @@ const getUserPerformance = async (req, res) => {
       GROUP BY bid_date
       ORDER BY bid_date DESC
     `;
-    
-    const dailyResult = await pool.query(dailyQuery, [user_id, date_from, date_to]);
-    
+
+    const dailyResult = await pool.query(dailyQuery, [
+      user_id,
+      date_from,
+      date_to,
+    ]);
+
     res.json({
       message: 'User performance fetched successfully',
       data: {
@@ -989,28 +1089,42 @@ const getUserPerformance = async (req, res) => {
           total_wins: parseInt(overall.total_wins),
           total_losses: parseInt(overall.total_losses),
           pending_bids: parseInt(overall.pending_bids),
-          win_rate: parseFloat(winRate)
+          win_rate: parseFloat(winRate),
         },
-        game_wise_performance: gameWiseResult.rows.map(row => ({
+        game_wise_performance: gameWiseResult.rows.map((row) => ({
           game_id: row.game_id,
           game_name: row.game_name,
           total_bids: parseInt(row.total_bids),
           total_amount: parseFloat(row.total_amount),
           total_winning_amount: parseFloat(row.total_winning_amount),
-          net_profit_loss: parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
+          net_profit_loss:
+            parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
           total_wins: parseInt(row.total_wins),
-          win_rate: parseInt(row.total_bids) > 0 ? ((parseInt(row.total_wins) / parseInt(row.total_bids)) * 100).toFixed(2) : 0
+          win_rate:
+            parseInt(row.total_bids) > 0
+              ? (
+                  (parseInt(row.total_wins) / parseInt(row.total_bids)) *
+                  100
+                ).toFixed(2)
+              : 0,
         })),
-        daily_performance: dailyResult.rows.map(row => ({
+        daily_performance: dailyResult.rows.map((row) => ({
           date: row.bid_date,
           total_bids: parseInt(row.total_bids),
           total_amount: parseFloat(row.total_amount),
           total_winning_amount: parseFloat(row.total_winning_amount),
-          net_profit_loss: parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
+          net_profit_loss:
+            parseFloat(row.total_winning_amount) - parseFloat(row.total_amount),
           total_wins: parseInt(row.total_wins),
-          win_rate: parseInt(row.total_bids) > 0 ? ((parseInt(row.total_wins) / parseInt(row.total_bids)) * 100).toFixed(2) : 0
-        }))
-      }
+          win_rate:
+            parseInt(row.total_bids) > 0
+              ? (
+                  (parseInt(row.total_wins) / parseInt(row.total_bids)) *
+                  100
+                ).toFixed(2)
+              : 0,
+        })),
+      },
     });
   } catch (error) {
     console.error('GET USER PERFORMANCE ERROR:', error.message);
@@ -1021,24 +1135,15 @@ const getUserPerformance = async (req, res) => {
 const getAgentPerformance = async (req, res) => {
   try {
     console.log('=== GET AGENT PERFORMANCE API CALLED ===');
-    
-    const { 
-      pagination = {}, 
-      filters = {} 
-    } = req.body;
-    
-    const { 
-      page = 1, 
-      limit = 10 
-    } = pagination;
-    
-    const {
-      date_from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      date_to = new Date().toISOString().split('T')[0]
-    } = filters;
-    
+
+    const { pagination = {}, filters = {} } = req.body;
+
+    const { page = 1, limit = 10 } = pagination;
+
+    const { date = new Date().toISOString().split('T')[0] } = filters;
+
     const offset = (page - 1) * limit;
-    
+
     // Summary - Total agents and their overall performance
     const summaryQuery = `
       SELECT 
@@ -1047,13 +1152,13 @@ const getAgentPerformance = async (req, res) => {
         COALESCE(SUM(b.amount), 0) as total_bid_amount,
         COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount
       FROM users u
-      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date BETWEEN $1 AND $2
+      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date = $1
       WHERE u.role = 'agent'
     `;
-    
-    const summaryResult = await pool.query(summaryQuery, [date_from, date_to]);
+
+    const summaryResult = await pool.query(summaryQuery, [date]);
     const summary = summaryResult.rows[0];
-    
+
     // Agent-wise performance with pagination
     const agentQuery = `
       SELECT 
@@ -1061,34 +1166,32 @@ const getAgentPerformance = async (req, res) => {
         u.full_name as agent_name,
         COUNT(b.id) as total_bids,
         COALESCE(SUM(b.amount), 0) as total_bid_amount,
-        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount,
-        MIN(b.bid_date) as first_bid_date,
-        MAX(b.bid_date) as last_bid_date
+        COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount
       FROM users u
-      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date BETWEEN $1 AND $2
-      WHERE u.role = 'agent'
+      LEFT JOIN bids b ON u.id = b.user_id AND b.bid_date = $1
+      WHERE u.role = 'agent' AND u.status = 'active' AND u.deleted_at IS NULL
       GROUP BY u.id, u.full_name
       ORDER BY total_bid_amount DESC
-      LIMIT $3 OFFSET $4
+      LIMIT $2 OFFSET $3
     `;
-    
-    const agentResult = await pool.query(agentQuery, [date_from, date_to, limit, offset]);
-    
+
+    const agentResult = await pool.query(agentQuery, [date, limit, offset]);
+
     // Count total agents for pagination
     const countQuery = `
       SELECT COUNT(DISTINCT u.id) as total
       FROM users u
-      WHERE u.role = 'agent'
+      WHERE u.role = 'agent' AND u.status = 'active' AND u.deleted_at IS NULL
     `;
     const countResult = await pool.query(countQuery);
     const totalAgents = parseInt(countResult.rows[0].total);
-    
+
     // Process agent data
-    const agentList = agentResult.rows.map(agent => {
+    const agentList = agentResult.rows.map((agent) => {
       const totalBidAmount = parseFloat(agent.total_bid_amount);
       const totalWinningAmount = parseFloat(agent.total_winning_amount);
-      const profitLoss = totalWinningAmount - totalBidAmount;
-      
+      const profitLoss = totalBidAmount - totalWinningAmount;
+
       return {
         user_id: agent.user_id,
         agent_name: agent.agent_name,
@@ -1096,12 +1199,12 @@ const getAgentPerformance = async (req, res) => {
         total_bid_amount: totalBidAmount,
         total_winning_amount: totalWinningAmount,
         profit_loss: profitLoss,
-        first_bid_date: agent.first_bid_date,
-        last_bid_date: agent.last_bid_date
       };
     });
-    
-    res.json({
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Agent performance fetched successfully',
       data: {
         summary: {
@@ -1109,8 +1212,10 @@ const getAgentPerformance = async (req, res) => {
           total_bids: parseInt(summary.total_bids),
           total_bid_amount: parseFloat(summary.total_bid_amount),
           total_winning_amount: parseFloat(summary.total_winning_amount),
-          overall_profit_loss: parseFloat(summary.total_winning_amount) - parseFloat(summary.total_bid_amount),
-          date_range: { from: date_from, to: date_to }
+          overall_profit_loss:
+            parseFloat(summary.total_winning_amount) -
+            parseFloat(summary.total_bid_amount),
+          date: date,
         },
         pagination: {
           current_page: parseInt(page),
@@ -1118,15 +1223,562 @@ const getAgentPerformance = async (req, res) => {
           total: totalAgents,
           total_pages: Math.ceil(totalAgents / limit),
           has_next: page * limit < totalAgents,
-          has_prev: page > 1
+          has_prev: page > 1,
         },
-        agent_list: agentList
-      }
+        agent_list: agentList,
+      },
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('GET AGENT PERFORMANCE ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch agent performance data',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 };
 
-export { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame, getDailyProfitLoss, getGameWiseEarning, getUserPerformance, getAgentPerformance };
+const getAllReceipts = async (req, res) => {
+  try {
+    console.log('=== GET ALL RECEIPTS API CALLED ===');
+    
+    const { pagination = {}, filters = {} } = req.body;
+    const { page = 1, limit = 10 } = pagination;
+    const { agent_id, date } = filters;
+    
+    const offset = (page - 1) * limit;
+    
+    let query = `
+      SELECT 
+        r.id,
+        r.receipt_no,
+        r.agent_id,
+        r.total_amount,
+        r.total_bids,
+        r.session,
+        r.receipt_date,
+        r.created_at,
+        u.full_name as agent_name
+      FROM receipts r
+      JOIN users u ON r.agent_id = u.id
+      WHERE 1=1
+    `;
+    
+    let params = [];
+    let paramCount = 0;
+    
+    if (agent_id) {
+      paramCount++;
+      query += ` AND r.agent_id = $${paramCount}`;
+      params.push(agent_id);
+    }
+    
+    if (date) {
+      paramCount++;
+      query += ` AND r.receipt_date = $${paramCount}`;
+      params.push(date);
+    }
+    
+    // Count total records
+    const countQuery = query.replace(
+      /SELECT[\s\S]*?FROM/,
+      'SELECT COUNT(*) as total FROM'
+    );
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+    
+    // Add pagination
+    paramCount++;
+    query += ` ORDER BY r.created_at DESC LIMIT $${paramCount}`;
+    params.push(limit);
+    
+    paramCount++;
+    query += ` OFFSET $${paramCount}`;
+    params.push(offset);
+    
+    const result = await pool.query(query, params);
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Receipts fetched successfully',
+      data: {
+        receipts: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: total,
+          total_pages: Math.ceil(total / limit),
+          has_next: page * limit < total,
+          has_prev: page > 1
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GET ALL RECEIPTS ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch receipts',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+const getReceiptByAgentId = async (req, res) => {
+  try {
+    console.log('=== GET RECEIPT BY AGENT ID API CALLED ===');
+    
+    const { agent_id } = req.params;
+    
+    if (!agent_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Agent ID is required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const query = `
+      SELECT 
+        r.id,
+        r.receipt_no,
+        r.agent_id,
+        r.total_amount,
+        r.total_bids,
+        r.session,
+        r.receipt_date,
+        r.created_at,
+        u.full_name as agent_name
+      FROM receipts r
+      JOIN users u ON r.agent_id = u.id
+      WHERE r.agent_id = $1
+      ORDER BY r.created_at DESC
+    `;
+    
+    const result = await pool.query(query, [agent_id]);
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Agent receipts fetched successfully',
+      data: {
+        agent_id: parseInt(agent_id),
+        receipts: result.rows
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GET RECEIPT BY AGENT ID ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch agent receipts',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+const generateReceipt = async (req, res) => {
+  try {
+    const { bid_id } = req.params;
+
+    if (!bid_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Bid ID is required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const receiptQuery = `
+      SELECT 
+        b.id as bid_id,
+        b.bid_number,
+        b.amount,
+        b.total_payout,
+        b.session_type,
+        b.bid_date,
+        b.status,
+        b.created_at,
+        g.game_name,
+        bt.display_name as bid_type,
+        u.full_name as user_name,
+        u.mobile_number
+      FROM bids b
+      JOIN games g ON b.game_id = g.id
+      JOIN bid_types bt ON b.bid_type::integer = bt.id
+      JOIN users u ON b.user_id = u.id
+      WHERE b.id = $1
+    `;
+
+    const result = await pool.query(receiptQuery, [bid_id]);
+
+    if (result.rows.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Bid not found',
+        errors: {
+          field: 'bid_id'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const receipt = result.rows[0];
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Receipt generated successfully',
+      data: {
+        receipt: {
+          bid_id: receipt.bid_id,
+          bid_number: receipt.bid_number,
+          game_name: receipt.game_name,
+          bid_type: receipt.bid_type,
+          session_type: receipt.session_type,
+          amount: parseFloat(receipt.amount),
+          total_payout: parseFloat(receipt.total_payout),
+          status: receipt.status,
+          bid_date: receipt.bid_date,
+          created_at: receipt.created_at,
+          user_details: {
+            name: receipt.user_name,
+            mobile: receipt.mobile_number
+          }
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GENERATE RECEIPT ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to generate receipt',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+const getHighRiskBids = async (req, res) => {
+  try {
+    console.log('=== GET HIGH RISK BIDS API CALLED ===');
+    console.log('Request Body:', req.body);
+
+    const { pagination = {}, filters = {} } = req.body;
+
+    const { page = 1, limit = 10 } = pagination;
+
+    const {
+      date = new Date().toISOString().split('T')[0],
+      game_name,
+      top_quantity = 25,
+    } = filters;
+
+    console.log('Pagination:', { page, limit });
+    console.log('Filters:', filters);
+
+    const offset = (page - 1) * limit;
+
+    // Build query with filters
+    let gameFilter = '';
+    let params = [date, top_quantity];
+    let paramCount = 2;
+
+    if (game_name) {
+      paramCount++;
+      gameFilter = ` AND LOWER(g.game_name) LIKE LOWER($${paramCount})`;
+      params.push(`%${game_name}%`);
+    }
+
+    // Get high risk bids with filters
+    const highRiskQuery = `
+      WITH ranked_bids AS (
+        SELECT 
+          b.id as bid_id,
+          b.game_id,
+          b.game_result_id as result_id,
+          b.bid_number,
+          b.amount,
+          b.session_type,
+          g.game_name,
+          bt.display_name as bid_type_name,
+          u.village,
+          agent.full_name as agent_name,
+          ROW_NUMBER() OVER (PARTITION BY b.game_id ORDER BY b.amount DESC) as rank
+        FROM bids b
+        JOIN games g ON b.game_id = g.id
+        JOIN bid_types bt ON b.bid_type::integer = bt.id
+        JOIN users u ON b.user_id = u.id
+        LEFT JOIN users agent ON agent.role = 'agent' AND agent.village = u.village
+        WHERE b.bid_date = $1 ${gameFilter}
+      )
+      SELECT 
+        bid_id,
+        game_id,
+        result_id,
+        agent_name,
+        game_name,
+        bid_type_name,
+        bid_number,
+        amount,
+        village,
+        session_type
+      FROM ranked_bids
+      WHERE rank <= $2
+      ORDER BY amount DESC
+    `;
+
+    // Count total records
+    const countQuery = `
+      WITH ranked_bids AS (
+        SELECT 
+          b.id as bid_id,
+          ROW_NUMBER() OVER (PARTITION BY b.game_id ORDER BY b.amount DESC) as rank
+        FROM bids b
+        JOIN games g ON b.game_id = g.id
+        WHERE b.bid_date = $1 ${gameFilter}
+      )
+      SELECT COUNT(*) as total
+      FROM ranked_bids
+      WHERE rank <= $2
+    `;
+
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+
+    // Add pagination
+    paramCount++;
+    const finalQuery =
+      highRiskQuery + ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(finalQuery, params);
+
+    console.log('Total Records:', total);
+    console.log('Fetched Records:', result.rows.length);
+
+    // Calculate summary
+    let totalHighRiskAmount = 0;
+    const processedBids = result.rows.map((bid) => {
+      const amount = parseFloat(bid.amount);
+      totalHighRiskAmount += amount;
+
+      return {
+        bid_id: bid.bid_id,
+        game_id: bid.game_id,
+        result_id: bid.result_id,
+        agent_name: bid.agent_name,
+        game_name: bid.game_name,
+        bid_type_name: bid.bid_type_name,
+        bid_number: bid.bid_number,
+        amount: amount,
+        village: bid.village,
+        session_type: bid.session_type,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'High risk bids fetched successfully',
+      data: {
+        date: date,
+        summary: {
+          total_high_risk_bids: total,
+          current_page_bids: result.rows.length,
+          current_page_amount: totalHighRiskAmount,
+          top_quantity: parseInt(top_quantity),
+        },
+        bids: processedBids,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: total,
+          total_pages: Math.ceil(total / limit),
+          has_next: page * limit < total,
+          has_prev: page > 1,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('GET HIGH RISK BIDS ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch high risk bids',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+const updateGameRate = async (req, res) => {
+  try {
+    console.log('=== UPDATE GAME RATE API CALLED ===');
+    console.log('Request Body:', req.body);
+
+    const { rates } = req.body;
+    const updatedBy = req.user?.id;
+
+    if (!rates || !Array.isArray(rates) || rates.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'rates array is required',
+        errors: {
+          field: 'validation',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const updatedRates = [];
+
+      for (const rate of rates) {
+        const {
+          game_id,
+          bid_type_id,
+          rate_per_rupee,
+          min_bid_amount,
+          max_bid_amount,
+          is_active,
+        } = rate;
+
+        if (!game_id || !bid_type_id) {
+          throw new Error('game_id and bid_type_id are required for each rate');
+        }
+
+        const existingRate = await client.query(
+          'SELECT * FROM bid_rates WHERE game_id = $1 AND bid_type_id = $2',
+          [game_id, bid_type_id]
+        );
+
+        let result;
+
+        if (existingRate.rows.length > 0) {
+          result = await client.query(
+            `UPDATE bid_rates SET 
+              rate_per_rupee = COALESCE($1, rate_per_rupee),
+              min_bid_amount = COALESCE($2, min_bid_amount),
+              max_bid_amount = COALESCE($3, max_bid_amount),
+              is_active = COALESCE($4, is_active),
+              updated_by = $5,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE game_id = $6 AND bid_type_id = $7
+            RETURNING *`,
+            [
+              rate_per_rupee,
+              min_bid_amount,
+              max_bid_amount,
+              is_active,
+              updatedBy,
+              game_id,
+              bid_type_id,
+            ]
+          );
+        } else {
+          result = await client.query(
+            `INSERT INTO bid_rates (
+              game_id, bid_type_id, rate_per_rupee, min_bid_amount, 
+              max_bid_amount, is_active, created_by, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            RETURNING *`,
+            [
+              game_id,
+              bid_type_id,
+              rate_per_rupee,
+              min_bid_amount,
+              max_bid_amount,
+              is_active,
+              updatedBy,
+            ]
+          );
+        }
+
+        updatedRates.push(result.rows[0]);
+      }
+
+      await client.query('COMMIT');
+
+      res.status(200).json({
+        success: true,
+        statusCode: 200,
+        message: `${updatedRates.length} game rates updated successfully`,
+        data: {
+          rates: updatedRates,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('UPDATE GAME RATE ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to update game rates',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+export {
+  placeBids,
+  getMyBids,
+  getBidTypes,
+  getAllBids,
+  fetchBids,
+  fetchBidsWithVillage,
+  getUserBidsForMobile,
+  getBidRatesByGame,
+  getDailyProfitLoss,
+  getGameWiseEarning,
+  getUserPerformance,
+  getAgentPerformance,
+  getHighRiskBids,
+  updateGameRate,
+  generateReceipt,
+  getAllReceipts,
+  getReceiptByAgentId,
+};

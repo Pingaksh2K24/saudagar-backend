@@ -44,12 +44,28 @@ const registerUser = async (req, res) => {
     const { full_name, mobile_number, role, email, password, created_by, village, address } = req.body;
 
     if (!full_name || !mobile_number || !role || !email || !password || !created_by) {
-      return res.status(400).json({ message: 'Full name, mobile number, role, email, password and created_by are required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Full name, mobile number, role, email, password and created_by are required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (userExists.rows.length > 0) {
-      return res.status(400).json({ message: 'User already exists' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'User already exists',
+        errors: {
+          field: 'email'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -63,23 +79,36 @@ const registerUser = async (req, res) => {
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id }, 'your-secret-key', { expiresIn: '30d' });
 
-    res.status(201).json({
+    res.status(200).json({
+      success: true,
+      statusCode: 201,
       message: 'User created successfully',
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        mobile_number: user.mobile_number,
-        role: user.role,
-        email: user.email,
-        village: user.village,
-        address: user.address,
-        created_at: user.created_at,
-        created_by: user.created_by
+      data: {
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          mobile_number: user.mobile_number,
+          role: user.role,
+          email: user.email,
+          village: user.village,
+          address: user.address,
+          created_at: user.created_at,
+          created_by: user.created_by
+        },
+        token
       },
-      token
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Internal server error',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -88,37 +117,77 @@ const loginUser = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'Email and password are required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const result = await pool.query('SELECT id, full_name, email, password_hash, mobile_number, role FROM users WHERE email = $1', [email]);
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 401,
+        message: 'Invalid email or password',
+        errors: {
+          field: 'credentials'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const user = result.rows[0];
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!isValidPassword) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 401,
+        message: 'Invalid email or password',
+        errors: {
+          field: 'credentials'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const token = jwt.sign({ id: user.id }, 'your-secret-key', { expiresIn: '30d' });
 
     res.json({
+      success: true,
+      statusCode: 200,
       message: 'Login successful',
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        mobile_number: user.mobile_number,
-        role: user.role
+      data: {
+        user: {
+          id: user.id,
+          name: user.full_name,
+          email: user.email,
+          role: user.role,
+          isActive: true
+        },
+        token: {
+          accessToken: token,
+          expiresIn: 2592000  // 30 days in seconds
+        }
       },
-      token
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Internal server error',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -139,12 +208,25 @@ const getAllUserList = async (req, res) => {
       WHERE deleted_by IS NULL
       ORDER BY id ASC
     `);
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Users fetched successfully',
-      users: result.rows
+      data: {
+        users: result.rows
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Internal server error',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -156,11 +238,35 @@ const getUserDetails = async (req, res) => {
       [id]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'User not found',
+        errors: {
+          field: 'user_id'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
-    res.json(result.rows[0]);
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'User details fetched successfully',
+      data: {
+        user: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Internal server error',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -211,7 +317,15 @@ const deleteUser = async (req, res) => {
     const deletedBy = req.user?.id || req.body.deleted_by;
 
     if (!deletedBy) {
-      return res.status(400).json({ message: 'deleted_by is required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'deleted_by is required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     const result = await pool.query(
@@ -220,13 +334,37 @@ const deleteUser = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found or already deleted' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'User not found or already deleted',
+        errors: {
+          field: 'user_id'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
-    res.json({ message: 'User deleted successfully', id: result.rows[0].id });
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'User deleted successfully',
+      data: {
+        id: result.rows[0].id
+      },
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     console.error('Delete user error:', error);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Internal server error',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -245,9 +383,14 @@ const updateUser = async (req, res) => {
     
     // Validation
     if (!full_name || !mobile_number || !role || !email) {
-      return res.status(400).json({ 
+      return res.status(200).json({
         success: false,
-        message: 'Full name, mobile number, role and email are required' 
+        statusCode: 400,
+        message: 'Full name, mobile number, role and email are required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
       });
     }
 
@@ -268,24 +411,37 @@ const updateUser = async (req, res) => {
     );
     
     if (result.rows.length === 0) {
-      return res.status(404).json({ 
+      return res.status(200).json({
         success: false,
-        message: 'User not found' 
+        statusCode: 404,
+        message: 'User not found',
+        errors: {
+          field: 'user_id'
+        },
+        timestamp: new Date().toISOString()
       });
     }
 
-    res.json({
+    res.status(200).json({
       success: true,
+      statusCode: 200,
       message: 'User updated successfully',
-      user: result.rows[0]
+      data: {
+        user: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
     console.error('UPDATE USER ERROR:', error);
-    res.status(500).json({ 
+    res.status(200).json({
       success: false,
+      statusCode: 500,
       message: 'Failed to update user',
-      error: error.message 
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
     });
   }
 };
@@ -302,13 +458,26 @@ const getVillageList = async (req, res) => {
       ORDER BY village ASC, full_name ASC
     `);
     
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Village list fetched successfully',
-      users: result.rows
+      data: {
+        users: result.rows
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('GET VILLAGE LIST ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch village list',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 

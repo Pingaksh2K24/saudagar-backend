@@ -184,7 +184,15 @@ const declareResult = async (req, res) => {
     const result_date = new Date().toISOString().split('T')[0]; // Auto set today's date
 
     if (!game_id) {
-      return res.status(400).json({ message: 'game_id is required' });
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'game_id is required',
+        errors: {
+          field: 'validation'
+        },
+        timestamp: new Date().toISOString()
+      });
     }
 
     // Check if result already exists for this game and date
@@ -237,13 +245,26 @@ const declareResult = async (req, res) => {
     console.log('Game Result:', result.rows[0]);
     await processBidsAfterResult(result.rows[0]);
 
-    res.status(201).json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Result declared successfully',
-      result: result.rows[0]
+      data: {
+        result: result.rows[0]
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('DECLARE RESULT ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to declare result',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -360,18 +381,31 @@ const getTodayResults = async (req, res) => {
         gr.winning_number
       FROM games g
       LEFT JOIN game_results gr ON g.id = gr.game_id AND DATE(gr.result_date) = DATE($1)
-      WHERE g.deleted_by IS NULL AND g.status = 'active'
+      WHERE g.deleted_by IS NULL AND g.status = 'active' AND g.id= gr.game_id
       ORDER BY g.open_time
     `, [today]);
 
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Today results fetched successfully',
-      date: today,
-      results: result.rows
+      data: {
+        date: today,
+        results: result.rows
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('GET TODAY RESULTS ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch today results',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -391,14 +425,27 @@ const getTodayGameResults = async (req, res) => {
       ORDER BY g.open_time ASC
     `, [today]);
 
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'Today game results fetched successfully',
-      date: today,
-      results: result.rows
+      data: {
+        date: today,
+        results: result.rows
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('GET TODAY GAME RESULTS ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch today game results',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -486,7 +533,9 @@ const getAllResults = async (req, res) => {
     
     const result = await pool.query(query, params);
     
-    res.json({
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
       message: 'All results fetched successfully',
       data: {
         results: result.rows,
@@ -498,11 +547,20 @@ const getAllResults = async (req, res) => {
           has_next: page * limit < total,
           has_prev: page > 1
         }
-      }
+      },
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('GET ALL RESULTS ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch all results',
+      errors: {
+        field: 'server'
+      },
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
