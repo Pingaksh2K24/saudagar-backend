@@ -114,13 +114,13 @@ const registerUser = async (req, res) => {
 
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, platform } = req.body;
 
-    if (!email || !password) {
+    if (!email || !password || !platform) {
       return res.status(200).json({
         success: false,
         statusCode: 400,
-        message: 'Email and password are required',
+        message: 'Email, password and platform are required',
         errors: {
           field: 'validation'
         },
@@ -152,6 +152,19 @@ const loginUser = async (req, res) => {
         message: 'Invalid email or password',
         errors: {
           field: 'credentials'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Check platform access for agent role
+    if (platform === 'web' && user.role === 'agent') {
+      return res.status(200).json({
+        success: false,
+        statusCode: 403,
+        message: 'Agents are not allowed to login on web platform',
+        errors: {
+          field: 'platform_access'
         },
         timestamp: new Date().toISOString()
       });

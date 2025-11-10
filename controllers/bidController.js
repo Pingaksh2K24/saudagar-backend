@@ -2,7 +2,6 @@ import pool from '../config/db.js';
 
 const placeBids = async (req, res) => {
   try {
-    console.log('=== PLACE BIDS API CALLED ===');
     const { bids, receipt } = req.body;
     const createdBy = req.user?.id;
 
@@ -14,14 +13,27 @@ const placeBids = async (req, res) => {
       return res.status(400).json({ message: 'Bids array is required' });
     }
 
-    if (!receipt || !receipt.receipt_id || !receipt.agent_id || !receipt.session || !receipt.receipt_date) {
-      return res.status(400).json({ message: 'Receipt object with receipt_id, agent_id, session, and receipt_date is required' });
+    if (
+      !receipt ||
+      !receipt.receipt_id ||
+      !receipt.agent_id ||
+      !receipt.session ||
+      !receipt.receipt_date
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            'Receipt object with receipt_id, agent_id, session, and receipt_date is required',
+        });
     }
 
     // Validate session value
     const validSessions = ['open', 'close'];
     if (!validSessions.includes(receipt.session.toLowerCase())) {
-      return res.status(400).json({ message: 'Session must be either "open" or "close"' });
+      return res
+        .status(400)
+        .json({ message: 'Session must be either "open" or "close"' });
     }
 
     // Validate each bid
@@ -56,7 +68,15 @@ const placeBids = async (req, res) => {
           receipt_no, agent_id, total_amount, total_bids, session, receipt_date, created_at, created_by
         ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7) 
         RETURNING id, receipt_no`,
-        [receipt.receipt_id, receipt.agent_id, receipt.total_amount, receipt.total_bids, receipt.session.toLowerCase(), receipt.receipt_date, createdBy]
+        [
+          receipt.receipt_id,
+          receipt.agent_id,
+          receipt.total_amount,
+          receipt.total_bids,
+          receipt.session.toLowerCase(),
+          receipt.receipt_date,
+          createdBy,
+        ]
       );
 
       const receiptTableId = receiptResult.rows[0].id; // Auto-generated ID from receipts table
@@ -89,19 +109,19 @@ const placeBids = async (req, res) => {
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata'), $10, $11, $12, CURRENT_TIMESTAMP, $13) 
           RETURNING *`,
           [
-            bid.user_id,
-            bid.game_id,
-            bid.game_result_id,
-            bid.bid_type_id,
+            parseInt(bid.user_id),
+            parseInt(bid.game_id),
+            parseInt(bid.game_result_id),
+            parseInt(bid.bid_type_id),
             bid.bid_number,
-            bid.amount,
-            rate,
+            parseFloat(bid.amount),
+            parseFloat(rate),
             bid.session_type,
-            totalPayout, // amount * rate
-            currentDate, // bid_date
-            'submitted', // status
-            receiptTableId, // receipt_id (auto-generated ID from receipts table)
-            createdBy,
+            parseFloat(totalPayout),
+            currentDate,
+            'submitted',
+            parseInt(receiptTableId),
+            parseInt(createdBy),
           ]
         );
 
@@ -118,7 +138,7 @@ const placeBids = async (req, res) => {
           total_amount: receipt.total_amount,
           total_bids: receipt.total_bids,
           session: receipt.session,
-          receipt_date: receipt.receipt_date
+          receipt_date: receipt.receipt_date,
         },
         bids: placedBids,
       });
@@ -129,7 +149,14 @@ const placeBids = async (req, res) => {
       client.release();
     }
   } catch (error) {
-    console.error('PLACE BIDS ERROR:', error.message);
+    console.error('=== PLACE BIDS ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    console.error('Request Body:', req.body);
+    console.error('User ID:', req.user?.id);
+    console.error('Calculated Values - Amount:', req.body?.bids?.[0]?.amount);
+    console.error('Calculated Values - Receipt Total:', req.body?.receipt?.total_amount);
+    console.error('Full Error Object:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -239,7 +266,6 @@ const getMyBids = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('GET MY BIDS ERROR:', error.message);
     res.status(500).json({ message: error.message });
   }
 };
@@ -260,7 +286,6 @@ const getBidTypes = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET BID TYPES ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -388,24 +413,18 @@ const getAllBids = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('GET ALL BIDS ERROR:', error.message);
     res.status(500).json({ message: error.message });
   }
 };
 
 const fetchBids = async (req, res) => {
   try {
-    console.log('=== FETCH BIDS API CALLED ===');
-    console.log('Request Body:', req.body);
 
     const { pagination = {}, filters = {} } = req.body;
 
     const { page = 1, limit = 10 } = pagination;
 
     const { date, game_id, session_type, status, bid_type, user_id } = filters;
-
-    console.log('Pagination:', { page, limit });
-    console.log('Filters:', filters);
 
     const offset = (page - 1) * limit;
 
@@ -519,7 +538,6 @@ const fetchBids = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('FETCH BIDS ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -534,9 +552,6 @@ const fetchBids = async (req, res) => {
 
 const fetchBidsWithVillage = async (req, res) => {
   try {
-    console.log('=== FETCH BIDS WITH VILLAGE API CALLED ===');
-    console.log('Request Body:', req.body);
-
     const { pagination = {}, filters = {} } = req.body;
 
     const { page = 1, limit = 10 } = pagination;
@@ -548,9 +563,6 @@ const fetchBidsWithVillage = async (req, res) => {
       session_type,
       status,
     } = filters;
-
-    console.log('Pagination:', { page, limit });
-    console.log('Filters:', filters);
 
     const offset = (page - 1) * limit;
 
@@ -635,12 +647,6 @@ const fetchBidsWithVillage = async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    console.log('Final Query:', query);
-    console.log('Query Params:', params);
-    console.log('Total Records:', total);
-    console.log('Total Amount:', totalAmount);
-    console.log('Fetched Records:', result.rows.length);
-
     res.status(200).json({
       success: true,
       statusCode: 200,
@@ -660,7 +666,6 @@ const fetchBidsWithVillage = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('FETCH BIDS WITH VILLAGE ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -675,14 +680,13 @@ const fetchBidsWithVillage = async (req, res) => {
 
 const getUserBidsForMobile = async (req, res) => {
   try {
-    console.log('=== GET USER BIDS FOR MOBILE API CALLED ===');
 
     const { user_id } = req.params;
     const { page = 1, limit = 10 } = req.query;
 
-    console.log('User ID:', user_id, 'Page:', page, 'Limit:', limit);
-
     const offset = (page - 1) * limit;
+
+    const currentDate = new Date().toISOString().split('T')[0];
 
     let query = `
       SELECT 
@@ -701,18 +705,20 @@ const getUserBidsForMobile = async (req, res) => {
       FROM bids b
       JOIN games g ON b.game_id = g.id
       JOIN bid_types bt ON b.bid_type::integer = bt.id
-      WHERE b.user_id = $1
+      WHERE b.user_id = $1 AND b.bid_date = $2
       ORDER BY b.created_at DESC
-      LIMIT $2 OFFSET $3
+      LIMIT $3 OFFSET $4
     `;
 
-    const result = await pool.query(query, [user_id, limit, offset]);
+    const result = await pool.query(query, [
+      user_id,
+      currentDate,
+      limit,
+      offset,
+    ]);
 
     // Simple check if more records exist
     const hasMore = result.rows.length === parseInt(limit);
-
-    console.log('Fetched Records:', result.rows.length);
-    console.log('Has More:', hasMore);
 
     res.json({
       message: 'User bids fetched successfully',
@@ -727,17 +733,13 @@ const getUserBidsForMobile = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('GET USER BIDS FOR MOBILE ERROR:', error.message);
     res.status(500).json({ message: error.message });
   }
 };
 
 const getBidRatesByGame = async (req, res) => {
   try {
-    console.log('=== GET BID RATES BY GAME API CALLED ===');
     const { game_id } = req.params;
-
-    console.log('Game ID:', game_id);
 
     if (!game_id) {
       return res.status(200).json({
@@ -771,7 +773,6 @@ const getBidRatesByGame = async (req, res) => {
 
     const result = await pool.query(query, [game_id]);
 
-    console.log('Fetched Rates:', result.rows.length);
 
     res.status(200).json({
       success: true,
@@ -784,7 +785,6 @@ const getBidRatesByGame = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET BID RATES BY GAME ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -799,7 +799,6 @@ const getBidRatesByGame = async (req, res) => {
 
 const getDailyProfitLoss = async (req, res) => {
   try {
-    console.log('=== GET DAILY PROFIT LOSS API CALLED ===');
 
     // Get last 7 days including today
     const dates = [];
@@ -808,8 +807,6 @@ const getDailyProfitLoss = async (req, res) => {
       date.setDate(date.getDate() - i);
       dates.push(date.toISOString().split('T')[0]);
     }
-
-    console.log('Calculating for dates:', dates);
 
     const dailyData = [];
     let totalSummary = {
@@ -854,9 +851,6 @@ const getDailyProfitLoss = async (req, res) => {
       totalSummary.profit_loss += profitLoss;
     }
 
-    console.log('Daily data calculated:', dailyData.length, 'days');
-    console.log('Total summary:', totalSummary);
-
     res.status(200).json({
       success: true,
       statusCode: 200,
@@ -876,7 +870,6 @@ const getDailyProfitLoss = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET DAILY PROFIT LOSS ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -891,10 +884,8 @@ const getDailyProfitLoss = async (req, res) => {
 
 const getGameWiseEarning = async (req, res) => {
   try {
-    console.log('=== GET GAME WISE EARNING API CALLED ===');
 
     const { date = new Date().toISOString().split('T')[0] } = req.query;
-    console.log('Calculating for date:', date);
 
     // Get game-wise statistics
     const gameWiseQuery = `
@@ -957,8 +948,6 @@ const getGameWiseEarning = async (req, res) => {
       }
     }
 
-    console.log('Game-wise data calculated for', gameWiseData.length, 'games');
-    console.log('Summary:', summary);
 
     res.status(200).json({
       success: true,
@@ -978,7 +967,6 @@ const getGameWiseEarning = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET GAME WISE EARNING ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -993,7 +981,6 @@ const getGameWiseEarning = async (req, res) => {
 
 const getUserPerformance = async (req, res) => {
   try {
-    console.log('=== GET USER PERFORMANCE API CALLED ===');
 
     const { user_id } = req.params;
     const {
@@ -1003,7 +990,6 @@ const getUserPerformance = async (req, res) => {
       date_to = new Date().toISOString().split('T')[0],
     } = req.query;
 
-    console.log('User ID:', user_id, 'Date Range:', date_from, 'to', date_to);
 
     // Overall performance
     const overallQuery = `
@@ -1127,14 +1113,12 @@ const getUserPerformance = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('GET USER PERFORMANCE ERROR:', error.message);
     res.status(500).json({ message: error.message });
   }
 };
 
 const getAgentPerformance = async (req, res) => {
   try {
-    console.log('=== GET AGENT PERFORMANCE API CALLED ===');
 
     const { pagination = {}, filters = {} } = req.body;
 
@@ -1230,7 +1214,6 @@ const getAgentPerformance = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET AGENT PERFORMANCE ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -1245,14 +1228,13 @@ const getAgentPerformance = async (req, res) => {
 
 const getAllReceipts = async (req, res) => {
   try {
-    console.log('=== GET ALL RECEIPTS API CALLED ===');
-    
+
     const { pagination = {}, filters = {} } = req.body;
     const { page = 1, limit = 10 } = pagination;
     const { agent_id, date } = filters;
-    
+
     const offset = (page - 1) * limit;
-    
+
     let query = `
       SELECT 
         r.id,
@@ -1268,22 +1250,22 @@ const getAllReceipts = async (req, res) => {
       JOIN users u ON r.agent_id = u.id
       WHERE 1=1
     `;
-    
+
     let params = [];
     let paramCount = 0;
-    
+
     if (agent_id) {
       paramCount++;
       query += ` AND r.agent_id = $${paramCount}`;
       params.push(agent_id);
     }
-    
+
     if (date) {
       paramCount++;
       query += ` AND r.receipt_date = $${paramCount}`;
       params.push(date);
     }
-    
+
     // Count total records
     const countQuery = query.replace(
       /SELECT[\s\S]*?FROM/,
@@ -1291,18 +1273,18 @@ const getAllReceipts = async (req, res) => {
     );
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
-    
+
     // Add pagination
     paramCount++;
     query += ` ORDER BY r.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
-    
+
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
-    
+
     const result = await pool.query(query, params);
-    
+
     res.status(200).json({
       success: true,
       statusCode: 200,
@@ -1315,43 +1297,41 @@ const getAllReceipts = async (req, res) => {
           total: total,
           total_pages: Math.ceil(total / limit),
           has_next: page * limit < total,
-          has_prev: page > 1
-        }
+          has_prev: page > 1,
+        },
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET ALL RECEIPTS ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
       message: 'Failed to fetch receipts',
       errors: {
-        field: 'server'
+        field: 'server',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
 
 const getReceiptDetails = async (req, res) => {
   try {
-    console.log('=== GET RECEIPT DETAILS API CALLED ===');
-    
+
     const { receipt_id } = req.params;
-    
+
     if (!receipt_id) {
       return res.status(200).json({
         success: false,
         statusCode: 400,
         message: 'Receipt ID is required',
         errors: {
-          field: 'validation'
+          field: 'validation',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
-    
+
     // Get receipt details
     const receiptQuery = `
       SELECT 
@@ -1369,23 +1349,23 @@ const getReceiptDetails = async (req, res) => {
       JOIN users u ON r.agent_id = u.id
       WHERE r.id = $1
     `;
-    
+
     const receiptResult = await pool.query(receiptQuery, [receipt_id]);
-    
+
     if (receiptResult.rows.length === 0) {
       return res.status(200).json({
         success: false,
         statusCode: 404,
         message: 'Receipt not found',
         errors: {
-          field: 'receipt_id'
+          field: 'receipt_id',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
-    
+
     const receipt = receiptResult.rows[0];
-    
+
     // Get all bids for this receipt
     const bidsQuery = `
       SELECT 
@@ -1408,9 +1388,9 @@ const getReceiptDetails = async (req, res) => {
       WHERE b.receipt_id = $1
       ORDER BY b.created_at ASC
     `;
-    
+
     const bidsResult = await pool.query(bidsQuery, [receipt_id]);
-    
+
     res.status(200).json({
       success: true,
       statusCode: 200,
@@ -1426,9 +1406,9 @@ const getReceiptDetails = async (req, res) => {
           total_bids: parseInt(receipt.total_bids),
           session: receipt.session,
           receipt_date: receipt.receipt_date,
-          created_at: receipt.created_at
+          created_at: receipt.created_at,
         },
-        bids: bidsResult.rows.map(bid => ({
+        bids: bidsResult.rows.map((bid) => ({
           bid_id: bid.bid_id,
           bid_number: bid.bid_number,
           game_name: bid.game_name,
@@ -1438,43 +1418,43 @@ const getReceiptDetails = async (req, res) => {
           total_payout: parseFloat(bid.total_payout),
           session_type: bid.session_type,
           status: bid.status,
-          user_name: bid.user_name
-        }))
+          user_name: bid.user_name,
+        })),
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET RECEIPT DETAILS ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
       message: 'Failed to fetch receipt details',
       errors: {
-        field: 'server'
+        field: 'server',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
 
 const getReceiptByAgentId = async (req, res) => {
   try {
-    console.log('=== GET RECEIPT BY AGENT ID API CALLED ===');
-    
+
     const { agent_id } = req.params;
-    
+
     if (!agent_id) {
       return res.status(200).json({
         success: false,
         statusCode: 400,
         message: 'Agent ID is required',
         errors: {
-          field: 'validation'
+          field: 'validation',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
-    
+
+    const currentDate = new Date().toISOString().split('T')[0];
+
     const query = `
       SELECT 
         r.id,
@@ -1488,32 +1468,31 @@ const getReceiptByAgentId = async (req, res) => {
         u.full_name as agent_name
       FROM receipts r
       JOIN users u ON r.agent_id = u.id
-      WHERE r.agent_id = $1
+      WHERE r.agent_id = $1 AND r.receipt_date = $2
       ORDER BY r.created_at DESC
     `;
-    
-    const result = await pool.query(query, [agent_id]);
-    
+
+    const result = await pool.query(query, [agent_id, currentDate]);
+
     res.status(200).json({
       success: true,
       statusCode: 200,
       message: 'Agent receipts fetched successfully',
       data: {
         agent_id: parseInt(agent_id),
-        receipts: result.rows
+        receipts: result.rows,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET RECEIPT BY AGENT ID ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
       message: 'Failed to fetch agent receipts',
       errors: {
-        field: 'server'
+        field: 'server',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -1528,9 +1507,9 @@ const generateReceipt = async (req, res) => {
         statusCode: 400,
         message: 'Bid ID is required',
         errors: {
-          field: 'validation'
+          field: 'validation',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
 
@@ -1563,9 +1542,9 @@ const generateReceipt = async (req, res) => {
         statusCode: 404,
         message: 'Bid not found',
         errors: {
-          field: 'bid_id'
+          field: 'bid_id',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
 
@@ -1589,30 +1568,27 @@ const generateReceipt = async (req, res) => {
           created_at: receipt.created_at,
           user_details: {
             name: receipt.user_name,
-            mobile: receipt.mobile_number
-          }
-        }
+            mobile: receipt.mobile_number,
+          },
+        },
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GENERATE RECEIPT ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
       message: 'Failed to generate receipt',
       errors: {
-        field: 'server'
+        field: 'server',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
 
 const getHighRiskBids = async (req, res) => {
   try {
-    console.log('=== GET HIGH RISK BIDS API CALLED ===');
-    console.log('Request Body:', req.body);
 
     const { pagination = {}, filters = {} } = req.body;
 
@@ -1624,8 +1600,6 @@ const getHighRiskBids = async (req, res) => {
       top_quantity = 25,
     } = filters;
 
-    console.log('Pagination:', { page, limit });
-    console.log('Filters:', filters);
 
     const offset = (page - 1) * limit;
 
@@ -1704,9 +1678,6 @@ const getHighRiskBids = async (req, res) => {
 
     const result = await pool.query(finalQuery, params);
 
-    console.log('Total Records:', total);
-    console.log('Fetched Records:', result.rows.length);
-
     // Calculate summary
     let totalHighRiskAmount = 0;
     const processedBids = result.rows.map((bid) => {
@@ -1752,7 +1723,6 @@ const getHighRiskBids = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('GET HIGH RISK BIDS ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -1767,8 +1737,6 @@ const getHighRiskBids = async (req, res) => {
 
 const updateGameRate = async (req, res) => {
   try {
-    console.log('=== UPDATE GAME RATE API CALLED ===');
-    console.log('Request Body:', req.body);
 
     const { rates } = req.body;
     const updatedBy = req.user?.id;
@@ -1873,7 +1841,6 @@ const updateGameRate = async (req, res) => {
       client.release();
     }
   } catch (error) {
-    console.error('UPDATE GAME RATE ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
