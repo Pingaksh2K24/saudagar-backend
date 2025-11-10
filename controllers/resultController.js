@@ -254,7 +254,7 @@ const processBidType = async (
         AND bid_type = $3 
         AND bid_number = $4 
         AND session_type = $5 
-        AND status = 'submitted'`,
+        AND status IN ('submitted', 'won', 'lost')`,
       [gameId, gameResultId, bidTypeId, actualWinningNumber, sessionType]
     );
 
@@ -263,13 +263,15 @@ const processBidType = async (
       `UPDATE bids SET 
         status = 'lost',
         result_declared_at = CURRENT_TIMESTAMP,
+        is_winner = false,
+        winning_amount = NULL,
         updated_at = CURRENT_TIMESTAMP
       WHERE game_id = $1 
         AND game_result_id = $2 
         AND bid_type = $3 
         AND session_type = $4 
         AND bid_number != $5 
-        AND status = 'submitted'`,
+        AND status IN ('submitted', 'won', 'lost')`,
       [gameId, gameResultId, bidTypeId, sessionType, actualWinningNumber]
     );
 
@@ -281,36 +283,13 @@ const processBidType = async (
   }
 };
 
-// const processPannaBids = async (gameId, gameResultId, winningNumber, sessionType) => {
-//   try {
-//     console.log('Processing panna bids:', { winningNumber, sessionType });
-
-//     // Determine panna type based on digit repetition
-//     const digits = winningNumber.split('');
-//     const uniqueDigits = [...new Set(digits)];
-
-//     let pannaType;
-//     if (uniqueDigits.length === 1) {
-//       pannaType = 'triple_panna'; // All same digits (111, 222)
-//     } else if (uniqueDigits.length === 2) {
-//       pannaType = 'double_panna'; // Two same digits (112, 223)
-//     } else {
-//       pannaType = 'single_panna'; // All different digits (123, 456)
-//     }
-
-//     console.log('Panna type detected:', pannaType);
-//     await processBidType(gameId, gameResultId, pannaType, winningNumber, sessionType);
-
-//   } catch (error) {
-//     console.error('PROCESS PANNA BIDS ERROR:', error.message);
-//   }
-// };
 
 // Admin Panel APIs
 
 const declareResult = async (req, res) => {
   try {
     const { game_id, open_result, close_result, winning_number } = req.body;
+    console.log('=== INSIDE declareResult ===', req.body);
     const createdBy = req.user?.id;
     const result_date = new Date().toISOString().split('T')[0]; // Auto set today's date
 
@@ -337,21 +316,21 @@ const declareResult = async (req, res) => {
       // Update existing result
       result = await pool.query(
         `UPDATE game_results SET 
-          open_result = COALESCE($1, open_result),
-          close_result = COALESCE($2, close_result), 
-          winning_number = COALESCE($3, winning_number),
-          open_status = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN 'declared' ELSE open_status END,
-          close_status = CASE WHEN $2 IS NOT NULL AND $2 != '' THEN 'declared' ELSE close_status END,
-          open_declared_at = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN CURRENT_TIMESTAMP ELSE open_declared_at END,
-          close_declared_at = CASE WHEN $2 IS NOT NULL AND $2 != '' THEN CURRENT_TIMESTAMP ELSE close_declared_at END,
+          open_result = $1::VARCHAR,
+          close_result = $2::VARCHAR, 
+          winning_number = $3::INTEGER,
+          open_status = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN 'declared' ELSE 'pending' END,
+          close_status = CASE WHEN $2 IS NOT NULL AND $2 != '' THEN 'declared' ELSE 'pending' END,
+          open_declared_at = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN CURRENT_TIMESTAMP ELSE NULL END,
+          close_declared_at = CASE WHEN $2 IS NOT NULL AND $2 != '' THEN CURRENT_TIMESTAMP ELSE NULL END,
           updated_by = $4,
           updated_at = CURRENT_TIMESTAMP
         WHERE game_id = $5 AND result_date = $6 
         RETURNING *`,
         [
-          open_result,
-          close_result,
-          winning_number,
+          open_result || null,
+          close_result || null,
+          winning_number ? parseInt(winning_number) : null,
           createdBy,
           game_id,
           result_date,
@@ -366,13 +345,13 @@ const declareResult = async (req, res) => {
           open_status, close_status,
           open_declared_at, close_declared_at,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        ) VALUES ($1, $2, $3::VARCHAR, $4::VARCHAR, $5::INTEGER, $6, $7, $8, $9, $10) RETURNING *`,
         [
           game_id,
           result_date,
-          open_result,
-          close_result,
-          winning_number,
+          open_result || null,
+          close_result || null,
+          winning_number ? parseInt(winning_number) : null,
           open_result && open_result !== '' ? 'declared' : 'pending',
           close_result && close_result !== '' ? 'declared' : 'pending',
           open_result && open_result !== '' ? 'CURRENT_TIMESTAMP' : null,
@@ -381,6 +360,8 @@ const declareResult = async (req, res) => {
         ]
       );
     }
+
+    // No reset needed - processBidsAfterResult will handle all statuses
 
     // Process bids after result declaration
     await processBidsAfterResult(result.rows[0]);
@@ -395,6 +376,12 @@ const declareResult = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
+    console.error('=== DECLARE RESULT ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    console.error('Request Body:', req.body);
+    console.error('User ID:', req.user?.id);
+    console.error('Full Error Object:', error);
     res.status(200).json({
       success: false,
       statusCode: 500,
