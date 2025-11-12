@@ -1,5 +1,5 @@
 import express from 'express';
-import { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame, getDailyProfitLoss, getGameWiseEarning, getUserPerformance, getAgentPerformance, getHighRiskBids, updateGameRate, generateReceipt, getAllReceipts, getReceiptByAgentId, getReceiptDetails } from '../controllers/bidController.js';
+import { placeBids, getMyBids, getBidTypes, getAllBids, fetchBids, fetchBidsWithVillage, getUserBidsForMobile, getBidRatesByGame, getDailyProfitLoss, getGameWiseEarning, getUserPerformance, getAgentPerformance, getHighRiskBids, updateGameRate, generateReceipt, getAllReceipts, getReceiptByAgentId, getReceiptDetails, getAgentList } from '../controllers/bidController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -23,5 +23,6 @@ router.get('/generate-receipt/:bid_id', protect, generateReceipt);
 router.post('/get-all-receipts', protect, getAllReceipts);
 router.get('/get-receipt-by-agent/:agent_id', protect, getReceiptByAgentId);
 router.get('/receipt-details/:receipt_id', protect, getReceiptDetails);
+router.get('/agent-list', protect, getAgentList);
 
 export default router;

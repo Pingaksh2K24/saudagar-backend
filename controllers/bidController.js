@@ -442,6 +442,8 @@ const fetchBids = async (req, res) => {
         b.session_type,
         b.bid_date,
         b.status,
+        b.is_winner,
+        b.winning_amount,
         g.game_name,
         u.full_name,
         gr.open_result,
@@ -1864,6 +1866,48 @@ const updateGameRate = async (req, res) => {
   }
 };
 
+const getAgentList = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        id,
+        full_name,
+        mobile_number,
+        village,
+        created_at
+      FROM users 
+      WHERE role = 'agent' AND status = 'active' AND deleted_at IS NULL
+      ORDER BY full_name ASC
+    `;
+
+    const result = await pool.query(query);
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Agent list fetched successfully',
+      data: {
+        agents: result.rows,
+        total_agents: result.rows.length,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('=== GET AGENT LIST ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch agent list',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
 export {
   placeBids,
   getMyBids,
@@ -1883,4 +1927,5 @@ export {
   getAllReceipts,
   getReceiptByAgentId,
   getReceiptDetails,
+  getAgentList,
 };
