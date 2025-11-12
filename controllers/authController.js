@@ -128,7 +128,7 @@ const loginUser = async (req, res) => {
       });
     }
 
-    const result = await pool.query('SELECT id, full_name, email, password_hash, mobile_number, role FROM users WHERE email = $1', [email]);
+    const result = await pool.query('SELECT id, full_name, email, mobile_number, password_hash, mobile_number, role FROM users WHERE email = $1', [email]);
 
     if (result.rows.length === 0) {
       return res.status(200).json({
@@ -162,7 +162,7 @@ const loginUser = async (req, res) => {
       return res.status(200).json({
         success: false,
         statusCode: 403,
-        message: 'Agents are not allowed to login on web platform',
+        message: 'You are not allowed to login on web platform',
         errors: {
           field: 'platform_access'
         },
@@ -181,6 +181,7 @@ const loginUser = async (req, res) => {
           id: user.id,
           name: user.full_name,
           email: user.email,
+          mobile_number: user.mobile_number,
           role: user.role,
           isActive: true
         },

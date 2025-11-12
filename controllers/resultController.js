@@ -1,5 +1,6 @@
 import pool from '../config/db.js';
 import { getPannaType } from '../utils/helper.js';
+import { getSinglePannaCombinations, getDoublePannaCombinations } from '../utils/masterPanna.js';
 
 // Process bids after result declaration
 const processBidsAfterResult = async (gameResult) => {
@@ -24,7 +25,7 @@ const processBidsAfterResult = async (gameResult) => {
       winning_number
     );
 
-    // Process Open Session
+    // Process Open Session - Single Digit
     if (
       winning_number &&
       winning_number.toString() &&
@@ -43,6 +44,26 @@ const processBidsAfterResult = async (gameResult) => {
         'Open'
       );
     }
+    
+    // Process Open Session - Single Digit Panna (when open_result length is 1)
+    if (
+      open_result &&
+      open_result.toString() &&
+      open_result.toString() !== '' &&
+      open_result.toString() !== 'null' &&
+      open_result.toString().length === 1
+    ) {
+      console.log(
+        'Processing OPEN session single digit panna with result:',
+        open_result.toString()
+      );
+      await processSingleDigitPanna(
+        game_id,
+        game_result_id,
+        open_result.toString(),
+        'Open'
+      );
+    }
     // Process Open Session Panna
     if (
       open_result &&
@@ -56,6 +77,22 @@ const processBidsAfterResult = async (gameResult) => {
         open_result.toString()
       );
       await updateBidsForSession(
+        game_id,
+        game_result_id,
+        open_result.toString(),
+        'Open'
+      );
+      
+      // Process single digit panna bids (reverse logic)
+      await processSingleDigitPannaReverse(
+        game_id,
+        game_result_id,
+        open_result.toString(),
+        'Open'
+      );
+      
+      // Process double panna bids (reverse logic)
+      await processDoublePannaReverse(
         game_id,
         game_result_id,
         open_result.toString(),
@@ -100,6 +137,22 @@ const processBidsAfterResult = async (gameResult) => {
         close_result.toString(),
         'Close'
       );
+      
+      // Process single digit panna bids (reverse logic)
+      await processSingleDigitPannaReverse(
+        game_id,
+        game_result_id,
+        close_result.toString(),
+        'Close'
+      );
+      
+      // Process double panna bids (reverse logic)
+      await processDoublePannaReverse(
+        game_id,
+        game_result_id,
+        close_result.toString(),
+        'Close'
+      );
     }
   } catch (error) {
     console.error('PROCESS BIDS ERROR:', error.message);
@@ -135,8 +188,6 @@ const updateBidsForSession = async (
       }
       // Panna types for open session (3-digit numbers)
       else if (winningNumber.length === 3) {
-        // let pannaType = getPannaType(winningNumber);
-        // console.log('Determined Panna Type:', pannaType);
         await processBidType(
           gameId,
           gameResultId,
@@ -179,11 +230,17 @@ const updateBidsForSession = async (
           winningNumber,
           'Open'
         );
+
+        // Jugar digit processing - jugar bids placed in Close session
+        await processJugarBids(
+          gameId,
+          gameResultId,
+          winningNumber,
+          'Open'
+        );
       }
       // Panna types for close session (3-digit numbers)
       else if (winningNumber.length === 3) {
-        // let pannaType = getPannaType(winningNumber);
-        // console.log('Determined Panna Type:', pannaType);
         await processBidType(
           gameId,
           gameResultId,
@@ -209,6 +266,262 @@ const updateBidsForSession = async (
     }
   } catch (error) {
     console.error('UPDATE BIDS ERROR:', error.message);
+  }
+};
+
+
+
+const processSingleDigitPannaReverse = async (gameId, gameResultId, threeDigitResult, sessionType) => {
+  try {
+    console.log('Processing single digit panna reverse:', { threeDigitResult, sessionType });
+    
+    // Get single panna bid type ID
+    const bidTypeResult = await pool.query(
+      'SELECT id FROM bid_types WHERE LOWER(type_code) = $1',
+      ['single_panna']
+    );
+    
+    if (bidTypeResult.rows.length === 0) {
+      console.log('Single panna bid type not found');
+      return;
+    }
+    
+    const bidTypeId = bidTypeResult.rows[0].id;
+    
+    // Get all single digit panna bids for this session
+    const singleDigitBids = await pool.query(
+      `SELECT id, bid_number FROM bids 
+       WHERE game_id = $1 AND game_result_id = $2 AND bid_type = $3 AND session_type = $4 
+       AND status IN ('submitted', 'won', 'lost') AND LENGTH(bid_number) = 1`,
+      [gameId, gameResultId, bidTypeId, sessionType]
+    );
+    
+    for (const bid of singleDigitBids.rows) {
+      const bidDigit = bid.bid_number;
+      const combinations = getSinglePannaCombinations(bidDigit);
+      
+      // Check if 3-digit result matches any combination for this digit
+      const isWinner = combinations.includes(threeDigitResult);
+      
+      if (isWinner) {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'won',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = true,
+            winning_amount = amount * rate,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'lost',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = false,
+            winning_amount = NULL,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      }
+    }
+    
+    console.log(`Processed ${singleDigitBids.rows.length} single digit panna bids (reverse)`);
+  } catch (error) {
+    console.error('PROCESS SINGLE DIGIT PANNA REVERSE ERROR:', error.message);
+  }
+};
+
+const processDoublePannaReverse = async (gameId, gameResultId, threeDigitResult, sessionType) => {
+  try {
+    console.log('Processing double panna reverse:', { threeDigitResult, sessionType });
+    
+    // Get double panna bid type ID
+    const bidTypeResult = await pool.query(
+      'SELECT id FROM bid_types WHERE LOWER(type_code) = $1',
+      ['double_panna']
+    );
+    
+    if (bidTypeResult.rows.length === 0) {
+      console.log('Double panna bid type not found');
+      return;
+    }
+    
+    const bidTypeId = bidTypeResult.rows[0].id;
+    
+    // Get all single digit double panna bids for this session
+    const singleDigitBids = await pool.query(
+      `SELECT id, bid_number FROM bids 
+       WHERE game_id = $1 AND game_result_id = $2 AND bid_type = $3 AND session_type = $4 
+       AND status IN ('submitted', 'won', 'lost') AND LENGTH(bid_number) = 1`,
+      [gameId, gameResultId, bidTypeId, sessionType]
+    );
+    
+    for (const bid of singleDigitBids.rows) {
+      const bidDigit = bid.bid_number;
+      const combinations = getDoublePannaCombinations(bidDigit);
+      
+      // Check if 3-digit result matches any combination for this digit
+      const isWinner = combinations.includes(threeDigitResult);
+      
+      if (isWinner) {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'won',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = true,
+            winning_amount = amount * rate,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'lost',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = false,
+            winning_amount = NULL,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      }
+    }
+    
+    console.log(`Processed ${singleDigitBids.rows.length} single digit double panna bids (reverse)`);
+  } catch (error) {
+    console.error('PROCESS DOUBLE PANNA REVERSE ERROR:', error.message);
+  }
+};
+
+const processSingleDigitPanna = async (gameId, gameResultId, singleDigit, sessionType) => {
+  try {
+    console.log('Processing single digit panna:', { singleDigit, sessionType });
+    
+    // Get all panna combinations for this digit
+    const combinations = getSinglePannaCombinations(singleDigit);
+    
+    // Get single panna bid type ID
+    const bidTypeResult = await pool.query(
+      'SELECT id FROM bid_types WHERE LOWER(type_code) = $1',
+      ['single_panna']
+    );
+    
+    if (bidTypeResult.rows.length === 0) {
+      console.log('Single panna bid type not found');
+      return;
+    }
+    
+    const bidTypeId = bidTypeResult.rows[0].id;
+    
+    // Update winning bids (any bid number that matches combinations)
+    for (const combination of combinations) {
+      await pool.query(
+        `UPDATE bids SET 
+          status = 'won',
+          result_declared_at = CURRENT_TIMESTAMP,
+          is_winner = true,
+          winning_amount = amount * rate,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE game_id = $1 
+          AND game_result_id = $2 
+          AND bid_type = $3 
+          AND bid_number = $4 
+          AND session_type = $5 
+          AND status IN ('submitted', 'won', 'lost')`,
+        [gameId, gameResultId, bidTypeId, combination, sessionType]
+      );
+    }
+    
+    console.log(`Processed single digit panna for digit ${singleDigit}`);
+  } catch (error) {
+    console.error('PROCESS SINGLE DIGIT PANNA ERROR:', error.message);
+  }
+};
+
+const processJugarBids = async (
+  gameId,
+  gameResultId,
+  winningNumber,
+  sessionType
+) => {
+  try {
+    console.log('Processing jugar bids:', { winningNumber, sessionType });
+
+    // Get jugar bid type ID
+    const bidTypeResult = await pool.query(
+      'SELECT id FROM bid_types WHERE LOWER(type_code) = $1',
+      ['jugar']
+    );
+
+    if (bidTypeResult.rows.length === 0) {
+      console.log('Jugar bid type not found');
+      return;
+    }
+
+    const bidTypeId = bidTypeResult.rows[0].id;
+
+    // Get all jugar bids for this game and session
+    const jugarBids = await pool.query(
+      `SELECT id, bid_number FROM bids 
+       WHERE game_id = $1 AND game_result_id = $2 AND bid_type = $3 AND session_type = $4 
+       AND status IN ('submitted', 'won', 'lost')`,
+      [gameId, gameResultId, bidTypeId, sessionType]
+    );
+
+    for (const bid of jugarBids.rows) {
+      const bidNumber = bid.bid_number;
+      let isWinner = false;
+
+      // Check if bid number contains slash
+      if (bidNumber.includes('/')) {
+        const [leftDigits, rightDigits] = bidNumber.split('/');
+
+        // Generate all possible combinations (5x6 = 30)
+        for (let i = 0; i < leftDigits.length; i++) {
+          for (let j = 0; j < rightDigits.length; j++) {
+            const combination = leftDigits[i] + rightDigits[j];
+            if (combination === winningNumber) {
+              isWinner = true;
+              break;
+            }
+          }
+          if (isWinner) break;
+        }
+      }
+
+      // Update bid status
+      if (isWinner) {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'won',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = true,
+            winning_amount = amount * rate,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE bids SET 
+            status = 'lost',
+            result_declared_at = CURRENT_TIMESTAMP,
+            is_winner = false,
+            winning_amount = NULL,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [bid.id]
+        );
+      }
+    }
+
+    console.log(`Processed ${jugarBids.rows.length} jugar bids`);
+  } catch (error) {
+    console.error('PROCESS JUGAR BIDS ERROR:', error.message);
   }
 };
 
@@ -282,7 +595,6 @@ const processBidType = async (
     console.error('UPDATE BIDS ERROR:', error.message);
   }
 };
-
 
 // Admin Panel APIs
 

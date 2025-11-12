@@ -1,22 +1,3 @@
-const getPannaType = (panna) => {
-  // convert to string (safety)
-  panna = String(panna);
-
-  // extract unique digits
-  const uniqueDigits = new Set(panna);
-
-  // check based on unique count
-  if (uniqueDigits.size === 1) {
-    return "triple_panna";
-  } else if (uniqueDigits.size === 2) {
-    return "double_panna";
-  } else if (uniqueDigits.size === 3) {
-    return "single_panna";
-  } else {
-    return "Invalid Panna";
-  }
-}
-
 // Master Panna Helper Functions
 
 
@@ -54,7 +35,6 @@ const getDoublePannaCombinations = (digit) => {
 };
 
 export {
-  getPannaType,
   getSinglePannaCombinations,
   getDoublePannaCombinations,
 };

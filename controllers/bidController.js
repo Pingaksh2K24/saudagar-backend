@@ -688,6 +688,16 @@ const getUserBidsForMobile = async (req, res) => {
 
     const currentDate = new Date().toISOString().split('T')[0];
 
+    // Count total bids
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM bids b
+      WHERE b.user_id = $1 AND b.bid_date = $2
+    `;
+    
+    const countResult = await pool.query(countQuery, [user_id, currentDate]);
+    const totalBids = parseInt(countResult.rows[0].total);
+
     let query = `
       SELECT 
         b.id,
@@ -727,6 +737,7 @@ const getUserBidsForMobile = async (req, res) => {
         pagination: {
           current_page: parseInt(page),
           per_page: parseInt(limit),
+          total_bids: totalBids,
           has_more: hasMore,
           next_page: hasMore ? parseInt(page) + 1 : null,
         },
