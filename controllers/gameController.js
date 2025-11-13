@@ -113,7 +113,7 @@ const getAllGames = async (req, res) => {
         created_by
       FROM games 
       WHERE deleted_by IS NULL 
-      ORDER BY created_at DESC
+      ORDER BY created_at ASC
     `);
     console.log('Games fetched count:', result.rows.length);
     

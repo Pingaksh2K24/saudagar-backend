@@ -55,7 +55,7 @@ const registerUser = async (req, res) => {
       });
     }
 
-    const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    const userExists = await pool.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
     if (userExists.rows.length > 0) {
       return res.status(200).json({
         success: false,
@@ -100,6 +100,8 @@ const registerUser = async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    console.error('REGISTER ERROR:', error.message);
+    console.error('REGISTER STACK:', error.stack);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -163,6 +165,19 @@ const loginUser = async (req, res) => {
         success: false,
         statusCode: 403,
         message: 'You are not allowed to login on web platform',
+        errors: {
+          field: 'platform_access'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Check platform access for mobile - only agents allowed
+    if (platform === 'android' && user.role !== 'agent') {
+      return res.status(200).json({
+        success: false,
+        statusCode: 403,
+        message: 'You are not allowed to login on mobile platform',
         errors: {
           field: 'platform_access'
         },
