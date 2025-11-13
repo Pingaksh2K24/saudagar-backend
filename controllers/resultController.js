@@ -630,7 +630,7 @@ const declareResult = async (req, res) => {
         `UPDATE game_results SET 
           open_result = $1::VARCHAR,
           close_result = $2::VARCHAR, 
-          winning_number = $3::INTEGER,
+          winning_number = $3::VARCHAR,
           open_status = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN 'declared' ELSE 'pending' END,
           close_status = CASE WHEN $2 IS NOT NULL AND $2 != '' THEN 'declared' ELSE 'pending' END,
           open_declared_at = CASE WHEN $1 IS NOT NULL AND $1 != '' THEN CURRENT_TIMESTAMP ELSE NULL END,
@@ -642,7 +642,7 @@ const declareResult = async (req, res) => {
         [
           open_result || null,
           close_result || null,
-          winning_number ? parseInt(winning_number) : null,
+          winning_number || null,
           createdBy,
           game_id,
           result_date,
@@ -663,7 +663,7 @@ const declareResult = async (req, res) => {
           result_date,
           open_result || null,
           close_result || null,
-          winning_number ? parseInt(winning_number) : null,
+          winning_number || null,
           open_result && open_result !== '' ? 'declared' : 'pending',
           close_result && close_result !== '' ? 'declared' : 'pending',
           open_result && open_result !== '' ? 'CURRENT_TIMESTAMP' : null,
