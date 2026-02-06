@@ -114,7 +114,7 @@ const registerUser = async (req, res) => {
   }
 };
 
-const loginUser = async (req, res) => {
+const   loginUser = async (req, res) => {
   try {
     const { email, password, platform } = req.body;
 
@@ -231,6 +231,7 @@ const getAllUserList = async (req, res) => {
         role,
         village,
         address,
+        commission_rate,
         COALESCE(status, 'Active') as status,
         created_at
       FROM users 
@@ -408,7 +409,7 @@ const logoutUser = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, mobile_number, role, email, status, village, address } = req.body;
+    const { full_name, mobile_number, role, email, status, village, address, commission_rate } = req.body;
     
     // Validation
     if (!full_name || !mobile_number || !role || !email) {
@@ -433,10 +434,11 @@ const updateUser = async (req, res) => {
         status = $5, 
         village = $6, 
         address = $7, 
+        commission_rate = $8,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $8 AND deleted_by IS NULL 
-      RETURNING id, full_name, mobile_number, role, email, status, village, address`,
-      [full_name, mobile_number, role, email, status || 'active', village, address, id]
+      WHERE id = $9 AND deleted_by IS NULL 
+      RETURNING id, full_name, mobile_number, role, email, status, village, address, commission_rate`,
+      [full_name, mobile_number, role, email, status || 'active', village, address, commission_rate, id]
     );
     
     if (result.rows.length === 0) {

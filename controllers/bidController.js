@@ -2,16 +2,28 @@ import pool from '../config/db.js';
 
 const placeBids = async (req, res) => {
   try {
+    console.log('=== PLACE BIDS API STARTED ===');
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('User Info:', req.user);
+    
     const { bids, receipt } = req.body;
     const createdBy = req.user?.id;
+    
+    console.log('Extracted Data:');
+    console.log('- Bids:', bids);
+    console.log('- Receipt:', receipt);
+    console.log('- Created By:', createdBy);
 
     if (!createdBy) {
+      console.log('❌ Authentication failed - no user ID');
       return res.status(401).json({ message: 'Authentication required' });
     }
 
     if (!bids || !Array.isArray(bids) || bids.length === 0) {
+      console.log('❌ Bids validation failed:', { bids, isArray: Array.isArray(bids), length: bids?.length });
       return res.status(400).json({ message: 'Bids array is required' });
     }
+    console.log('✅ Bids validation passed - Count:', bids.length);
 
     if (
       !receipt ||
@@ -20,6 +32,13 @@ const placeBids = async (req, res) => {
       !receipt.session ||
       !receipt.receipt_date
     ) {
+      console.log('❌ Receipt validation failed:', {
+        hasReceipt: !!receipt,
+        hasReceiptId: !!receipt?.receipt_id,
+        hasAgentId: !!receipt?.agent_id,
+        hasSession: !!receipt?.session,
+        hasReceiptDate: !!receipt?.receipt_date
+      });
       return res
         .status(400)
         .json({
@@ -27,23 +46,31 @@ const placeBids = async (req, res) => {
             'Receipt object with receipt_id, agent_id, session, and receipt_date is required',
         });
     }
+    console.log('✅ Receipt validation passed');
 
     // Validate session value
     const validSessions = ['open', 'close'];
+    console.log('Session validation:', { session: receipt.session, validSessions });
     if (!validSessions.includes(receipt.session.toLowerCase())) {
+      console.log('❌ Session validation failed:', receipt.session);
       return res
         .status(400)
         .json({ message: 'Session must be either "open" or "close"' });
     }
+    console.log('✅ Session validation passed');
 
     // Validate each bid
+    console.log('Starting bid validation for', bids.length, 'bids');
     for (let i = 0; i < bids.length; i++) {
       const bid = bids[i];
+      console.log(`Validating bid ${i + 1}:`, bid);
+      
       const required = [
         'user_id',
         'game_id',
         'game_result_id',
         'bid_type_id',
+        'bid_type_label',
         'bid_number',
         'amount',
         'session_type',
@@ -51,18 +78,32 @@ const placeBids = async (req, res) => {
 
       for (const field of required) {
         if (!bid[field]) {
+          console.log(`❌ Bid ${i + 1} validation failed - missing ${field}:`, bid);
           return res.status(400).json({
             message: `Bid ${i + 1}: ${field} is required`,
           });
         }
       }
+      console.log(`✅ Bid ${i + 1} validation passed`);
     }
 
+    console.log('🔄 Starting database transaction...');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      console.log('✅ Database transaction started');
 
       // Insert receipt from provided data
+      console.log('📝 Inserting receipt with data:', {
+        receipt_id: receipt.receipt_id,
+        agent_id: receipt.agent_id,
+        total_amount: receipt.total_amount,
+        total_bids: receipt.total_bids,
+        session: receipt.session.toLowerCase(),
+        receipt_date: receipt.receipt_date,
+        created_by: createdBy
+      });
+      
       const receiptResult = await client.query(
         `INSERT INTO receipts (
           receipt_no, agent_id, total_amount, total_bids, session, receipt_date, created_at, created_by
@@ -78,21 +119,33 @@ const placeBids = async (req, res) => {
           createdBy,
         ]
       );
+      
+      console.log('✅ Receipt inserted successfully:', receiptResult.rows[0]);
 
       const receiptTableId = receiptResult.rows[0].id; // Auto-generated ID from receipts table
       const receiptNumber = receiptResult.rows[0].receipt_no;
+      
+      console.log('Receipt created with ID:', receiptTableId, 'Number:', receiptNumber);
 
       const placedBids = [];
       const currentDate = new Date().toISOString().split('T')[0];
+      console.log('Current date for bids:', currentDate);
+      console.log('🔄 Starting to process', bids.length, 'bids...');
 
-      for (const bid of bids) {
+      for (let bidIndex = 0; bidIndex < bids.length; bidIndex++) {
+        const bid = bids[bidIndex];
+        console.log(`\n📊 Processing bid ${bidIndex + 1}/${bids.length}:`, bid);
+        
         // Fetch rate_per_rupee from bid_rates table
+        console.log('🔍 Fetching rate for game_id:', bid.game_id, 'bid_type_id:', bid.bid_type_id);
         const rateResult = await client.query(
           'SELECT rate_per_rupee FROM bid_rates WHERE game_id = $1 AND bid_type_id = $2',
           [bid.game_id, bid.bid_type_id]
         );
+        console.log('Rate query result:', rateResult.rows);
 
         if (rateResult.rows.length === 0) {
+          console.log('❌ Rate not found for game_id:', bid.game_id, 'bid_type_id:', bid.bid_type_id);
           throw new Error(
             `Rate not found for game_id: ${bid.game_id} and bid_type_id: ${bid.bid_type_id}`
           );
@@ -100,7 +153,28 @@ const placeBids = async (req, res) => {
 
         const rate = rateResult.rows[0].rate_per_rupee;
         const totalPayout = bid.amount * rate;
+        console.log('💰 Calculated values:', {
+          amount: bid.amount,
+          rate: rate,
+          totalPayout: totalPayout
+        });
 
+        console.log('📝 Inserting bid with values:', {
+          user_id: parseInt(bid.user_id),
+          game_id: parseInt(bid.game_id),
+          game_result_id: parseInt(bid.game_result_id),
+          bid_type: parseInt(bid.bid_type_id),
+          bid_number: bid.bid_number,
+          amount: parseFloat(bid.amount),
+          rate: parseFloat(rate),
+          session_type: bid.session_type,
+          total_payout: parseFloat(totalPayout),
+          bid_date: currentDate,
+          status: 'submitted',
+          receipt_id: parseInt(receiptTableId),
+          created_by: parseInt(createdBy)
+        });
+        
         const result = await client.query(
           `INSERT INTO bids (
             user_id, game_id, game_result_id, bid_type, bid_number, 
@@ -124,13 +198,20 @@ const placeBids = async (req, res) => {
             parseInt(createdBy),
           ]
         );
+        
+        console.log('✅ Bid inserted successfully with ID:', result.rows[0].id);
 
         placedBids.push(result.rows[0]);
+        console.log(`✅ Bid ${bidIndex + 1} processed successfully`);
       }
+      
+      console.log('🎉 All bids processed successfully. Total:', placedBids.length);
 
+      console.log('💾 Committing transaction...');
       await client.query('COMMIT');
+      console.log('✅ Transaction committed successfully');
 
-      res.status(201).json({
+      const responseData = {
         message: `${placedBids.length} bids placed successfully`,
         receipt: {
           id: receiptTableId,
@@ -141,11 +222,18 @@ const placeBids = async (req, res) => {
           receipt_date: receipt.receipt_date,
         },
         bids: placedBids,
-      });
+      };
+      
+      console.log('📤 Sending success response:', responseData);
+      res.status(201).json(responseData);
     } catch (error) {
+      console.log('❌ Database error occurred, rolling back transaction');
+      console.log('Database Error:', error.message);
+      console.log('Database Error Stack:', error.stack);
       await client.query('ROLLBACK');
       throw error;
     } finally {
+      console.log('🔄 Releasing database connection');
       client.release();
     }
   } catch (error) {
@@ -1386,14 +1474,12 @@ const getReceiptDetails = async (req, res) => {
         b.id as bid_id,
         b.bid_number,
         b.amount,
-        b.rate,
-        b.total_payout,
         b.session_type,
-        b.status,
         b.bid_date,
         b.created_at,
         g.game_name,
         bt.display_name as bid_type_name,
+        bt.bid_code,
         u.full_name as user_name
       FROM bids b
       JOIN games g ON b.game_id = g.id
@@ -1427,11 +1513,9 @@ const getReceiptDetails = async (req, res) => {
           bid_number: bid.bid_number,
           game_name: bid.game_name,
           bid_type_name: bid.bid_type_name,
+          bid_code: bid.bid_code,
           amount: parseFloat(bid.amount),
-          rate: parseFloat(bid.rate),
-          total_payout: parseFloat(bid.total_payout),
           session_type: bid.session_type,
-          status: bid.status,
           user_name: bid.user_name,
         })),
       },
@@ -1450,10 +1534,176 @@ const getReceiptDetails = async (req, res) => {
   }
 };
 
+const generateDahaghari = async (req, res) => {
+  try {
+    const { date, game_id, session, chart_id } = req.body;
+
+    // Validation
+    if (!date || !game_id || !session || !chart_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'date, game_id, session, and chart_id are required',
+        errors: {
+          field: 'validation',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Get game name
+    const gameQuery = `SELECT game_name FROM games WHERE id = $1`;
+    const gameResult = await pool.query(gameQuery, [game_id]);
+    
+    if (gameResult.rows.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Game not found',
+        errors: {
+          field: 'game_id',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const gameName = gameResult.rows[0].game_name;
+
+    // Get all bids for the specific date, game, and session
+    // chart_id determines bid_type: 1=Single, 2=Panna, 3=Other, etc.
+    let bidsQuery;
+
+    if (chart_id == 1) {
+      // Single digit - group by bid_number itself (0-9)
+      bidsQuery = `
+        SELECT 
+          b.bid_number as grouping_key,
+          b.amount
+        FROM bids b
+        WHERE b.bid_date = $1 
+          AND b.game_id = $2 
+          AND LOWER(b.session_type) = LOWER($3)
+          AND b.bid_type::INTEGER = 1
+          AND LENGTH(b.bid_number) = 1
+          AND b.bid_number ~ '^[0-9]$'
+        ORDER BY b.created_at
+      `;
+    } else if (chart_id == 2) {
+      // Panna - group by sum of digits, then take last digit
+      // Consider multiple panna bid types: Single Panna, Double Panna, Triple Panna
+      bidsQuery = `
+        SELECT 
+          b.bid_number,
+          b.amount,
+          (
+            (CAST(SUBSTRING(b.bid_number, 1, 1) AS INTEGER) + 
+             CAST(SUBSTRING(b.bid_number, 2, 1) AS INTEGER) + 
+             CAST(SUBSTRING(b.bid_number, 3, 1) AS INTEGER)) % 10
+          )::TEXT as grouping_key
+        FROM bids b
+        WHERE b.bid_date = $1 
+          AND b.game_id = $2 
+          AND LOWER(b.session_type) = LOWER($3)
+          AND b.bid_type::INTEGER IN (3, 4, 5)
+          AND LENGTH(b.bid_number) = 3
+          AND b.bid_number ~ '^[0-9]{3}$'
+        ORDER BY b.created_at
+      `;
+    } else {
+      // For other chart types, use first digit logic
+      bidsQuery = `
+        SELECT 
+          SUBSTRING(b.bid_number, 1, 1) as grouping_key,
+          b.amount
+        FROM bids b
+        WHERE b.bid_date = $1 
+          AND b.game_id = $2 
+          AND b.session_type = $3
+          AND b.bid_type = $4
+        ORDER BY b.created_at
+      `;
+    }
+
+    const bidsResult = await pool.query(bidsQuery, 
+      chart_id <= 2 ? [date, game_id, session] : [date, game_id, session, chart_id]
+    );
+
+    // Initialize dahaghari chart structure
+    const dahaghari_chart = {
+      number_1: [],
+      number_2: [],
+      number_3: [],
+      number_4: [],
+      number_5: [],
+      number_6: [],
+      number_7: [],
+      number_8: [],
+      number_9: [],
+      number_0: [],
+    };
+
+    const number_sum = {
+      number_1: 0,
+      number_2: 0,
+      number_3: 0,
+      number_4: 0,
+      number_5: 0,
+      number_6: 0,
+      number_7: 0,
+      number_8: 0,
+      number_9: 0,
+      number_0: 0,
+    };
+
+    // Process bids and group by digit
+    bidsResult.rows.forEach(bid => {
+      const digit = bid.grouping_key;
+      const amount = parseFloat(bid.amount);
+      
+      if (digit >= '0' && digit <= '9') {
+        const key = `number_${digit}`;
+        dahaghari_chart[key].push(amount);
+        number_sum[key] += amount;
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Dahaghari chart generated successfully',
+      data: {
+        date: date,
+        game_name: gameName,
+        chart_id: parseInt(chart_id),
+        session: session,
+        dahaghari_chart: dahaghari_chart,
+        number_sum: number_sum,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('=== GENERATE DAHAGHARI ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    console.error('Request Body:', req.body);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to generate dahaghari chart',
+      error_details: error.message,
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
 const getReceiptByAgentId = async (req, res) => {
   try {
 
     const { agent_id } = req.params;
+    const { date, page = 1, limit = 10 } = req.query;
 
     if (!agent_id) {
       return res.status(200).json({
@@ -1467,7 +1717,18 @@ const getReceiptByAgentId = async (req, res) => {
       });
     }
 
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = date || new Date().toISOString().split('T')[0];
+    const offset = (page - 1) * limit;
+
+    // Count total receipts
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM receipts r
+      WHERE r.agent_id = $1 AND r.receipt_date = $2
+    `;
+    
+    const countResult = await pool.query(countQuery, [agent_id, currentDate]);
+    const totalReceipts = parseInt(countResult.rows[0].total);
 
     const query = `
       SELECT 
@@ -1484,9 +1745,13 @@ const getReceiptByAgentId = async (req, res) => {
       JOIN users u ON r.agent_id = u.id
       WHERE r.agent_id = $1 AND r.receipt_date = $2
       ORDER BY r.created_at DESC
+      LIMIT $3 OFFSET $4
     `;
 
-    const result = await pool.query(query, [agent_id, currentDate]);
+    const result = await pool.query(query, [agent_id, currentDate, limit, offset]);
+
+    // Check if more records exist
+    const hasMore = result.rows.length === parseInt(limit);
 
     res.status(200).json({
       success: true,
@@ -1494,7 +1759,17 @@ const getReceiptByAgentId = async (req, res) => {
       message: 'Agent receipts fetched successfully',
       data: {
         agent_id: parseInt(agent_id),
+        agent_name: result.rows.length > 0 ? result.rows[0].agent_name : null,
+        date: currentDate,
+        total_receipts_for_date: totalReceipts,
         receipts: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_receipts: totalReceipts,
+          has_more: hasMore,
+          next_page: hasMore ? parseInt(page) + 1 : null,
+        },
       },
       timestamp: new Date().toISOString(),
     });
@@ -1928,5 +2203,6 @@ export {
   getAllReceipts,
   getReceiptByAgentId,
   getReceiptDetails,
+  generateDahaghari,
   getAgentList,
 };

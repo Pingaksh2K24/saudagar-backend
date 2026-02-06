@@ -372,4 +372,228 @@ const getGameById = async (req, res) => {
   }
 };
 
-export { addGame, getAllGames, updateGame, deleteGame, getGameById };
+const getAgentKhatabookDetails = async (req, res) => {
+  try {
+    const { date, game_id } = req.body;
+    console.log('=== GET AGENT KHATABOOK DETAILS API CALLED ===');
+    console.log('Request body:', req.body);
+    // Validation
+    if (!date || !game_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'date and game_id are required',
+        errors: {
+          field: 'validation',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Get all agents
+    const agentsQuery = `
+      SELECT 
+        id as agent_id,
+        full_name,
+        commission_rate
+      FROM users 
+      WHERE role = 'agent' AND deleted_by IS NULL AND status = 'active'
+      ORDER BY full_name ASC
+    `;
+    
+    const agentsResult = await pool.query(agentsQuery);
+    
+    if (agentsResult.rows.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'No active agents found',
+        errors: {
+          field: 'agents',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const agentDetails = [];
+
+    // Process each agent
+    for (const agent of agentsResult.rows) {
+      // Get collection details for the specific date and game
+      const collectionQuery = `
+        SELECT 
+          COALESCE(SUM(CASE WHEN b.session_type = 'Open' THEN b.amount ELSE 0 END), 0) as open_collection,
+          COALESCE(SUM(CASE WHEN b.session_type = 'Close' THEN b.amount ELSE 0 END), 0) as close_collection,
+          COALESCE(SUM(b.amount), 0) as total_collection,
+          COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.total_payout ELSE 0 END), 0) as total_winning_amount
+        FROM bids b
+        JOIN receipts r ON b.receipt_id = r.id
+        WHERE b.bid_date = $1 
+          AND b.game_id = $2 
+          AND r.agent_id = $3
+      `;
+
+      const collectionResult = await pool.query(collectionQuery, [date, game_id, agent.agent_id]);
+      const collection = collectionResult.rows[0];
+
+      // Get agent khatabook details for requested date
+      const khatabookQuery = `
+        SELECT 
+          COALESCE(debit, 0) as debit,
+          COALESCE(credit, 0) as credit
+        FROM agent_khatabook 
+        WHERE agent_id = $1 AND date = $2 AND game_id = $3
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+
+      const khatabookResult = await pool.query(khatabookQuery, [agent.agent_id, date, game_id]);
+      const khatabook = khatabookResult.rows[0] || { debit: 0, credit: 0 };
+
+      // Get previous date current_balance
+      const previousBalanceQuery = `
+        SELECT 
+          COALESCE(current_balance, 0) as current_balance
+        FROM agent_khatabook 
+        WHERE agent_id = $1 AND date < $2 AND game_id = $3
+        ORDER BY date DESC, created_at DESC
+        LIMIT 1
+      `;
+
+      const previousBalanceResult = await pool.query(previousBalanceQuery, [agent.agent_id, date, game_id]);
+      const previousBalance = previousBalanceResult.rows[0] || { current_balance: 0 };
+
+      // Calculate commission and final amounts
+      const openCollection = parseFloat(collection.open_collection);
+      const closeCollection = parseFloat(collection.close_collection);
+      const totalCollection = parseFloat(collection.total_collection);
+      const totalWinningAmount = parseFloat(collection.total_winning_amount);
+      const commissionRate = parseFloat(agent.commission_rate) || 0;
+      
+      const agentCommission = Math.round((totalCollection * commissionRate) / 100);
+      const netAmount = totalCollection - totalWinningAmount - agentCommission;
+      
+      let toGive = 0;
+      let toTake = 0;
+      let outstandingAmount = 0;
+      const prevBalance = parseFloat(previousBalance.current_balance);
+      const creditAmount = parseFloat(khatabook.credit);
+      
+      if (netAmount >= 0) {
+        toTake = netAmount;
+        outstandingAmount = prevBalance + toTake - creditAmount;
+      } else {
+        toGive = Math.abs(netAmount);
+        outstandingAmount = prevBalance - toGive - creditAmount;
+      }
+
+      agentDetails.push({
+        agent_id: parseInt(agent.agent_id),
+        full_name: agent.full_name,
+        commission_rate: commissionRate,
+        open_collection: openCollection,
+        close_collection: closeCollection,
+        total_collection: totalCollection,
+        agent_commission: agentCommission,
+        total_winning_amount: totalWinningAmount,
+        to_give: parseFloat(toGive.toFixed(2)),
+        to_take: parseFloat(toTake.toFixed(2)),
+        debit: parseFloat(khatabook.debit),
+        credit: creditAmount,
+        current_balance: prevBalance,
+        outstanding_amount: parseFloat(outstandingAmount.toFixed(2)),
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Agent khatabook details fetched successfully',
+      data: {
+        date: date,
+        game_id: parseInt(game_id),
+        total_agents: agentDetails.length,
+        agents: agentDetails,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('=== GET AGENT KHATABOOK DETAILS ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch agent khatabook details',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+const agentDailyKhataSettlement = async (req, res) => {
+  try {
+    const { agent_id, game_id, date, debit, credit, settled_amount, current_balance, user_id } = req.body;
+
+    // Validation
+    if (!agent_id || !game_id || !date || !user_id) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'agent_id, game_id, date, and user_id are required',
+        errors: {
+          field: 'validation',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Insert into agent_khatabook table
+    const insertQuery = `
+      INSERT INTO agent_khatabook (
+        agent_id, game_id, date, debit, credit, settled_amount, 
+        current_balance, is_locked, created_by, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+      RETURNING *
+    `;
+
+    const result = await pool.query(insertQuery, [
+      agent_id,
+      game_id,
+      date,
+      debit || 0,
+      credit || 0,
+      settled_amount || 0,
+      current_balance || 0,
+      true, // is_locked = true
+      user_id
+    ]);
+
+    res.status(200).json({
+      success: true,
+      statusCode: 201,
+      message: 'Agent daily khata settlement recorded successfully',
+      data: {
+        settlement: result.rows[0]
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('=== AGENT DAILY KHATA SETTLEMENT ERROR ===');
+    console.error('Error Message:', error.message);
+    console.error('Error Stack:', error.stack);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to record agent daily khata settlement',
+      errors: {
+        field: 'server',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+export { addGame, getAllGames, updateGame, deleteGame, getGameById, getAgentKhatabookDetails, agentDailyKhataSettlement };

@@ -28,20 +28,22 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
-// 🔹 Main scheduler logic - Create entries from tomorrow till month end
+// 🔹 Main scheduler logic - Create entries from tomorrow for next 3 months
 async function createDailyGameResults() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Start from tomorrow (01/11/2025)
+    // Start from tomorrow
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     
-    // Get month end date
-    const monthEnd = new Date(tomorrow.getFullYear(), tomorrow.getMonth() + 1, 0);
+    // Get end date - 3 months from tomorrow
+    const threeMonthsEnd = new Date(tomorrow);
+    threeMonthsEnd.setMonth(threeMonthsEnd.getMonth() + 3);
+    threeMonthsEnd.setDate(threeMonthsEnd.getDate() - 1); // Last day of 3rd month
     
-    logger.info(`Creating entries from ${tomorrow.toISOString().split('T')[0]} to ${monthEnd.toISOString().split('T')[0]}`);
+    logger.info(`Creating entries from ${tomorrow.toISOString().split('T')[0]} to ${threeMonthsEnd.toISOString().split('T')[0]}`);
 
     // Step 1️⃣ : Fetch all active games (not deleted)
     const { rows: activeGames } = await client.query(
@@ -56,9 +58,9 @@ async function createDailyGameResults() {
 
     let totalEntriesCreated = 0;
 
-    // Step 2️⃣ : Loop through each date from tomorrow to month end
+    // Step 2️⃣ : Loop through each date from tomorrow for next 3 months
     const currentDate = new Date(tomorrow);
-    while (currentDate <= monthEnd) {
+    while (currentDate <= threeMonthsEnd) {
       const resultDate = currentDate.toISOString().split("T")[0];
       
       // Loop through games for this date
@@ -107,7 +109,7 @@ async function createDailyGameResults() {
     }
 
     await client.query("COMMIT");
-    logger.info(`🎯 Total ${totalEntriesCreated} game result entries created from tomorrow till month end`);
+    logger.info(`🎯 Total ${totalEntriesCreated} game result entries created from tomorrow for next 3 months`);
   } catch (err) {
     await client.query("ROLLBACK");
     logger.error("❌ Error creating daily game results:", err.message);

@@ -1,6 +1,4 @@
 // Master Panna Helper Functions
-
-
 const getSinglePannaCombinations = (digit) => {
   const combinations = {
     '0': ['127', '136', '145', '190', '235', '280', '370', '389', '460', '479', '569', '578'],
@@ -34,7 +32,41 @@ const getDoublePannaCombinations = (digit) => {
   return combinations[digit] || [];
 };
 
+const getTriplePannaCombinations = (digit) => {
+  const combinations = {
+    '0': ['000'],
+    '1': ['777'],
+    '2': ['444'],
+    '3': ['111'],
+    '4': ['888'],
+    '5': ['555'],
+    '6': ['222'],
+    '7': ['999'],
+    '8': ['666'],
+    '9': ['333'],
+  };
+  return combinations[digit] || [];
+};
+
+const getKatPannaCombinations = (digit) => {
+  const combinations = {
+    '0': ['136','127','389','479','550'],
+    '1': ['380','489','560','146','227'],
+    '2': ['138','499','156','570','137'],
+    '3': ['247','166','238','490','580'],
+    '4': ['167','257','338','149','590'],
+    '5': ['168','267','348','249','500'],
+    '6': ['150','277','358','349','169'],
+    '7': ['160','278','368','449','250'],
+    '8': ['279','350','116','378','459'],
+    '9': ['126','388','450','270','469'],
+  };
+  return combinations[digit] || [];
+};
+
 export {
   getSinglePannaCombinations,
   getDoublePannaCombinations,
+  getTriplePannaCombinations,
+  getKatPannaCombinations,
 };
