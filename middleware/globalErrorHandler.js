@@ -1,9 +1,14 @@
-export const globalErrorHandler = (err, req, res, next) => {
+import ErrorLogService from '../services/ErrorLogService.js';
+
+export const globalErrorHandler = async (err, req, res, next) => {
   console.error('=== GLOBAL ERROR ===');
   console.error('Error Message:', err.message);
   console.error('Error Stack:', err.stack);
   console.error('Request URL:', req.url);
   console.error('Request Method:', req.method);
+  
+  // Log error to database
+  await ErrorLogService.logError(err, req, req.user?.id);
   
   if (res.headersSent) return next(err);
   

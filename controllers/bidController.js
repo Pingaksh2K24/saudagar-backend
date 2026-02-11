@@ -16,12 +16,22 @@ const placeBids = async (req, res) => {
 
     if (!createdBy) {
       console.log('❌ Authentication failed - no user ID');
-      return res.status(401).json({ message: 'Authentication required' });
+      return res.status(401).json({ 
+        success: false,
+        statusCode: 401,
+        message: 'Authentication required',
+        timestamp: new Date().toISOString()
+      });
     }
 
     if (!bids || !Array.isArray(bids) || bids.length === 0) {
       console.log('❌ Bids validation failed:', { bids, isArray: Array.isArray(bids), length: bids?.length });
-      return res.status(400).json({ message: 'Bids array is required' });
+      return res.status(400).json({ 
+        success: false,
+        statusCode: 400,
+        message: 'Bids array is required',
+        timestamp: new Date().toISOString()
+      });
     }
     console.log('✅ Bids validation passed - Count:', bids.length);
 
@@ -39,12 +49,12 @@ const placeBids = async (req, res) => {
         hasSession: !!receipt?.session,
         hasReceiptDate: !!receipt?.receipt_date
       });
-      return res
-        .status(400)
-        .json({
-          message:
-            'Receipt object with receipt_id, agent_id, session, and receipt_date is required',
-        });
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: 'Receipt object with receipt_id, agent_id, session, and receipt_date is required',
+        timestamp: new Date().toISOString()
+      });
     }
     console.log('✅ Receipt validation passed');
 
@@ -53,9 +63,12 @@ const placeBids = async (req, res) => {
     console.log('Session validation:', { session: receipt.session, validSessions });
     if (!validSessions.includes(receipt.session.toLowerCase())) {
       console.log('❌ Session validation failed:', receipt.session);
-      return res
-        .status(400)
-        .json({ message: 'Session must be either "open" or "close"' });
+      return res.status(400).json({ 
+        success: false,
+        statusCode: 400,
+        message: 'Session must be either "open" or "close"',
+        timestamp: new Date().toISOString()
+      });
     }
     console.log('✅ Session validation passed');
 
@@ -63,8 +76,7 @@ const placeBids = async (req, res) => {
     console.log('Starting bid validation for', bids.length, 'bids');
     for (let i = 0; i < bids.length; i++) {
       const bid = bids[i];
-      console.log(`Validating bid ${i + 1}:`, bid);
-      
+      console.log(`Validating bid ${i + 1}:`, bid);     
       const required = [
         'user_id',
         'game_id',
@@ -75,15 +87,35 @@ const placeBids = async (req, res) => {
         'amount',
         'session_type',
       ];
-
       for (const field of required) {
         if (!bid[field]) {
           console.log(`❌ Bid ${i + 1} validation failed - missing ${field}:`, bid);
           return res.status(400).json({
+            success: false,
+            statusCode: 400,
             message: `Bid ${i + 1}: ${field} is required`,
+            timestamp: new Date().toISOString()
           });
         }
       }
+
+      // Double Panna validation (bid_type_id = 4)
+      if (bid.bid_type_id == 4 && bid.bid_number.length === 3) {
+        const digits = bid.bid_number.split('');
+        const digitCount = {};
+        digits.forEach(d => digitCount[d] = (digitCount[d] || 0) + 1);
+        
+        if (!Object.values(digitCount).includes(2)) {
+          console.log(`❌ Bid ${i + 1} Double Panna validation failed:`, bid.bid_number);
+          return res.status(400).json({
+            success: false,
+            statusCode: 400,
+            message: `Bid ${i + 1}: Invalid Double Panna number "${bid.bid_number}". Must have exactly one digit appearing twice (e.g., 121, 112, 223)`,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
       console.log(`✅ Bid ${i + 1} validation passed`);
     }
 
@@ -212,16 +244,21 @@ const placeBids = async (req, res) => {
       console.log('✅ Transaction committed successfully');
 
       const responseData = {
+        success: true,
+        statusCode: 201,
         message: `${placedBids.length} bids placed successfully`,
-        receipt: {
-          id: receiptTableId,
-          receipt_no: receiptNumber,
-          total_amount: receipt.total_amount,
-          total_bids: receipt.total_bids,
-          session: receipt.session,
-          receipt_date: receipt.receipt_date,
+        data: {
+          receipt: {
+            id: receiptTableId,
+            receipt_no: receiptNumber,
+            total_amount: receipt.total_amount,
+            total_bids: receipt.total_bids,
+            session: receipt.session,
+            receipt_date: receipt.receipt_date,
+          },
+          bids: placedBids,
         },
-        bids: placedBids,
+        timestamp: new Date().toISOString()
       };
       
       console.log('📤 Sending success response:', responseData);
@@ -245,7 +282,12 @@ const placeBids = async (req, res) => {
     console.error('Calculated Values - Amount:', req.body?.bids?.[0]?.amount);
     console.error('Calculated Values - Receipt Total:', req.body?.receipt?.total_amount);
     console.error('Full Error Object:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      statusCode: 500,
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 };
 

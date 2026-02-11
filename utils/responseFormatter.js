@@ -1,17 +1,32 @@
-export const formatResponse = (success, statusCode, message, data = null, errors = null) => ({
-  success,
-  statusCode,
-  message,
-  ...(data && { data }),
-  ...(errors && { errors }),
-  timestamp: new Date().toISOString(),
-});
+class ResponseFormatter {
+  static success(res, statusCode, message, data = null) {
+    const response = {
+      success: true,
+      statusCode,
+      message,
+      timestamp: new Date().toISOString()
+    };
 
-export const successResponse = (message, data = null) => 
-  formatResponse(true, 200, message, data);
+    if (data) {
+      response.data = data;
+    }
 
-export const errorResponse = (message, statusCode = 500, errors = { field: 'server' }) => 
-  formatResponse(false, statusCode, message, null, errors);
+    return res.status(200).json(response);
+  }
 
-export const validationErrorResponse = (message) => 
-  formatResponse(false, 400, message, null, { field: 'validation' });
+  static error(res, statusCode, message, field = 'server') {
+    return res.status(200).json({
+      success: false,
+      statusCode,
+      message,
+      errors: { field },
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+// Named exports for backward compatibility
+export const successResponse = ResponseFormatter.success;
+export const errorResponse = ResponseFormatter.error;
+
+export default ResponseFormatter;

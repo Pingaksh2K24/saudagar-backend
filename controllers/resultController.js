@@ -1,6 +1,10 @@
 import pool from '../config/db.js';
 import { getPannaType } from '../utils/helper.js';
-import { getSinglePannaCombinations, getDoublePannaCombinations } from '../utils/masterPanna.js';
+import {
+  getSinglePannaCombinations,
+  getDoublePannaCombinations,
+  getKatPannaCombinations,
+} from '../utils/masterPanna.js';
 
 // Process bids after result declaration
 const processBidsAfterResult = async (gameResult) => {
@@ -57,7 +61,9 @@ const processBidsAfterResult = async (gameResult) => {
         'Processing Single Digit Panna for digit:',
         open_result.toString()
       );
-      const pannaCombinations = getSinglePannaCombinations(open_result.toString());
+      const pannaCombinations = getSinglePannaCombinations(
+        open_result.toString()
+      );
       await processSingleDigitPanna(
         game_id,
         game_result_id,
@@ -99,6 +105,13 @@ const processBidsAfterResult = async (gameResult) => {
       );
       // Process double panna bids for Open session
       await processDoublePannaBids(
+        game_id,
+        game_result_id,
+        open_result.toString(),
+        'Open'
+      );
+      // Process kat panna bids for Open session
+      await processKatPannaBids(
         game_id,
         game_result_id,
         open_result.toString(),
@@ -152,6 +165,13 @@ const processBidsAfterResult = async (gameResult) => {
       );
       // Process double panna bids for Close session
       await processDoublePannaBids(
+        game_id,
+        game_result_id,
+        close_result.toString(),
+        'Close'
+      );
+      // Process kat panna bids for Close session
+      await processKatPannaBids(
         game_id,
         game_result_id,
         close_result.toString(),
@@ -246,6 +266,79 @@ const updateBidsForSession = async (
   }
 };
 
+const processKatPannaBids = async (
+  gameId,
+  gameResultId,
+  resultNumber,
+  sessionType
+) => {
+  try {
+    console.log(
+      `Processing kat panna bids for ${sessionType} session with result ${resultNumber}`
+    );
+
+    const bidTypeResult = await pool.query(
+      "SELECT id FROM bid_types WHERE LOWER(type_code) = 'kat_panna'"
+    );
+
+    if (bidTypeResult.rows.length === 0) {
+      console.log('Kat panna bid type not found');
+      return;
+    }
+
+    const bidTypeId = bidTypeResult.rows[0].id;
+    console.log('Kat panna bid type ID:', bidTypeId);
+    const bids = await pool.query(
+      `SELECT id, bid_number, amount FROM bids 
+       WHERE game_id = $1 AND game_result_id = $2 AND bid_type = $3 
+       AND session_type = $4 AND status IN ('submitted', 'won', 'lost')`,
+      [gameId, gameResultId, bidTypeId, sessionType]
+    );
+
+    console.log(`Found ${bids.rows.length} kat panna bids to process`);
+
+    for (const bid of bids.rows) {
+      const bidNumber = bid.bid_number;
+      const combinations = getKatPannaCombinations(bidNumber);
+      const matchedCombination = combinations.find(
+        (combo) => combo === resultNumber
+      );
+
+      if (matchedCombination) {
+        const digits = matchedCombination.split('');
+        const uniqueDigits = new Set(digits);
+        const combinationType = uniqueDigits.size === 3 ? 'single_com' : 'double_com';
+
+        const rateResult = await pool.query(
+          `SELECT rate_per_rupee FROM bid_rates  
+           WHERE game_id = $1 AND bid_type_id = $2 AND combination_type = $3`,
+          [gameId, bidTypeId, combinationType]
+        );
+
+        const rate = rateResult.rows.length > 0 ? parseFloat(rateResult.rows[0].rate_per_rupee) : 0;
+        console.log('Kat panna winning rate:', rate);
+        await pool.query(
+          `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
+           is_winner = true, winning_amount = amount * $1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [rate, bid.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
+           is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [bid.id]
+        );
+      }
+    }
+
+    console.log(`Kat panna bids processed for ${sessionType}`);
+  } catch (error) {
+    console.error('PROCESS KAT PANNA BIDS ERROR:', error.message);
+  }
+};
+
 const processDoublePannaBids = async (
   gameId,
   gameResultId,
@@ -253,7 +346,9 @@ const processDoublePannaBids = async (
   sessionType
 ) => {
   try {
-    console.log(`Processing double panna bids for ${sessionType} session with result ${resultNumber}`);
+    console.log(
+      `Processing double panna bids for ${sessionType} session with result ${resultNumber}`
+    );
 
     const bidTypeResult = await pool.query(
       "SELECT id FROM bid_types WHERE LOWER(type_code) = 'double_panna'"
@@ -319,7 +414,9 @@ const processSingleDigitPannaBids = async (
   sessionType
 ) => {
   try {
-    console.log(`Processing single digit panna bids for ${sessionType} session with result ${resultNumber}`);
+    console.log(
+      `Processing single digit panna bids for ${sessionType} session with result ${resultNumber}`
+    );
 
     const bidTypeResult = await pool.query(
       "SELECT id FROM bid_types WHERE LOWER(type_code) = 'single_panna'"
@@ -530,7 +627,7 @@ const processBidType = async (
   actualWinningNumber,
   sessionType
 ) => {
-  console.log('INSIDE PROCESS Single Panna BID TYPE FUNCTION',bidTypeName);
+  console.log('INSIDE PROCESS Single Panna BID TYPE FUNCTION', bidTypeName);
   try {
     console.log('Processing bid type:', {
       bidTypeName,
@@ -803,10 +900,11 @@ const getGameResultHistory = async (req, res) => {
 
 const getTodayResults = async (req, res) => {
   try {
-    // Get today's date in Indian timezone
     const today = new Date().toLocaleDateString('en-CA', {
       timeZone: 'Asia/Kolkata',
     });
+    
+    const currentTime = new Date().toTimeString().slice(0, 8);
 
     const result = await pool.query(
       `
@@ -819,14 +917,40 @@ const getTodayResults = async (req, res) => {
         gr.id as result_id,
         gr.open_result,
         gr.close_result,
-        gr.winning_number
+        gr.winning_number,
+        gr.is_bidding_enabled,
+        CASE 
+          WHEN $2 < TO_CHAR(g.open_time, 'HH24:MI:SS') THEN 'Open'
+          WHEN $2 >= TO_CHAR(g.open_time, 'HH24:MI:SS') AND $2 < TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Bidding for Close'
+          WHEN $2 >= TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Close'
+        END as current_status
       FROM games g
       INNER JOIN game_results gr ON g.id = gr.game_id AND gr.result_date = $1
       WHERE g.deleted_by IS NULL AND g.status = 'active'
       ORDER BY g.id ASC
     `,
-      [today]
+      [today, currentTime]
     );
+    
+    const formattedResults = result.rows.map(row => {
+      let game_sessions = [];
+      
+      if (row.current_status === 'Open') {
+        game_sessions = [
+          { id: 1, status: 'Open' },
+          { id: 2, status: 'Close' }
+        ];
+      } else if (row.current_status === 'Bidding for Close') {
+        game_sessions = [
+          { id: 2, status: 'Close' }
+        ];
+      }
+      
+      return {
+        ...row,
+        game_sessions
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -834,11 +958,13 @@ const getTodayResults = async (req, res) => {
       message: 'Today results fetched successfully',
       data: {
         date: today,
-        results: result.rows,
+        current_server_time: currentTime,
+        results: formattedResults,
       },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
+    console.error('GET TODAY RESULTS ERROR:', error);
     res.status(200).json({
       success: false,
       statusCode: 500,
@@ -923,6 +1049,7 @@ const getAllResults = async (req, res) => {
         gr.winning_number,
         gr.open_status,
         gr.close_status,
+        gr.is_bidding_enabled,
         gr.created_at,
         g.game_name
       FROM game_results gr
@@ -962,7 +1089,7 @@ const getAllResults = async (req, res) => {
 
     // Add pagination
     paramCount++;
-    query += ` ORDER BY gr.result_date DESC, gr.created_at DESC LIMIT $${paramCount}`;
+    query += ` ORDER BY g.id ASC, gr.result_date DESC, gr.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
 
     paramCount++;

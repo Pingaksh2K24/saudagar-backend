@@ -596,4 +596,96 @@ const agentDailyKhataSettlement = async (req, res) => {
   }
 };
 
-export { addGame, getAllGames, updateGame, deleteGame, getGameById, getAgentKhatabookDetails, agentDailyKhataSettlement };
+const updateBiddingStatus = async (req, res) => {
+  try {
+    const { game_result_id, status } = req.body;
+    
+    if (!game_result_id || typeof status !== 'boolean') {
+      return res.status(200).json({
+        success: false,
+        statusCode: 400,
+        message: 'game_result_id and status (boolean) are required',
+        errors: { field: 'validation' },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const result = await pool.query(
+      'UPDATE game_results SET is_bidding_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [status, game_result_id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(200).json({
+        success: false,
+        statusCode: 404,
+        message: 'Game result not found',
+        errors: { field: 'game_result_id' },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: `Bidding ${status ? 'enabled' : 'disabled'} successfully`,
+      data: { game_result: result.rows[0] },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('UPDATE BIDDING STATUS ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to update bidding status',
+      errors: { field: 'server' },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+const getGameStatus = async (req, res) => {
+  try {
+    const currentTime = new Date();
+    const currentTimeString = currentTime.toTimeString().slice(0, 8); // HH:MM:SS format
+    
+    const result = await pool.query(`
+      SELECT 
+        g.id,
+        g.game_name,
+        TO_CHAR(g.open_time, 'HH24:MI:SS') as open_time,
+        TO_CHAR(g.close_time, 'HH24:MI:SS') as close_time,
+        g.status as game_status,
+        CASE 
+          WHEN $1 < TO_CHAR(g.open_time, 'HH24:MI:SS') THEN 'Open'
+          WHEN $1 >= TO_CHAR(g.open_time, 'HH24:MI:SS') AND $1 < TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Bidding for Close'
+          WHEN $1 >= TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Close'
+        END as current_status
+      FROM games g
+      WHERE g.deleted_by IS NULL AND g.status = 'active'
+      ORDER BY g.open_time ASC
+    `, [currentTimeString]);
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'Game status fetched successfully',
+      data: {
+        current_server_time: currentTimeString,
+        games: result.rows
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GET GAME STATUS ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch game status',
+      errors: { field: 'server' },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+export { addGame, getAllGames, updateGame, deleteGame, getGameById, getAgentKhatabookDetails, agentDailyKhataSettlement, updateBiddingStatus, getGameStatus };

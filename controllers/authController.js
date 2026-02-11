@@ -4,6 +4,12 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import AuthService from '../services/AuthService.js';
+import ActivityLogService from '../services/ActivityLogService.js';
+import EmailNotificationService from '../services/EmailNotificationService.js';
+import ErrorLogService from '../services/ErrorLogService.js';
+import ResponseFormatter from '../utils/ResponseFormatter.js';
+import APP_SETTINGS from '../config/appSettings.js';
 
 // File upload configuration
 const storage = multer.diskStorage({
@@ -114,109 +120,149 @@ const registerUser = async (req, res) => {
   }
 };
 
-const   loginUser = async (req, res) => {
+const loginUser = async (req, res) => {
   try {
     const { email, password, platform } = req.body;
 
+    // Validation
     if (!email || !password || !platform) {
-      return res.status(200).json({
-        success: false,
-        statusCode: 400,
-        message: 'Email, password and platform are required',
-        errors: {
-          field: 'validation'
-        },
-        timestamp: new Date().toISOString()
-      });
+      return ResponseFormatter.error(res, 400, 'Email, password and platform are required', 'validation');
     }
 
-    const result = await pool.query('SELECT id, full_name, email, mobile_number, password_hash, mobile_number, role FROM users WHERE email = $1', [email]);
+    // Extract request info
+    const { ipAddress, deviceInfo, latitude, longitude } = AuthService.extractRequestInfo(req);
+    const logData = { ipAddress, deviceInfo, latitude, longitude, platform };
 
-    if (result.rows.length === 0) {
-      return res.status(200).json({
-        success: false,
-        statusCode: 401,
-        message: 'Invalid email or password',
-        errors: {
-          field: 'credentials'
-        },
-        timestamp: new Date().toISOString()
+    // Find user
+    const user = await AuthService.findUserByEmail(email);
+    
+    if (!user) {
+      await ActivityLogService.logActivity({
+        ...logData,
+        userId: null,
+        activityType: 'LOGIN_FAILED',
+        description: `Login failed: Invalid email ${email}`
       });
+      
+      await EmailNotificationService.sendLoginNotification('failed', {
+        email,
+        reason: 'Invalid email',
+        ...logData
+      });
+      
+      return ResponseFormatter.error(res, 401, APP_SETTINGS.MESSAGES.LOGIN_FAILED, 'credentials');
     }
 
-    const user = result.rows[0];
-    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    // Log login attempt
+    await ActivityLogService.logActivity({
+      ...logData,
+      userId: user.id,
+      activityType: 'LOGIN',
+      description: 'Login attempt'
+    });
 
+    // Check user status
+    if (user.status && user.status.toLowerCase() === 'inactive') {
+      await ActivityLogService.logActivity({
+        ...logData,
+        userId: user.id,
+        activityType: 'LOGIN_FAILED',
+        description: 'Login failed: Account inactive'
+      });
+      
+      await EmailNotificationService.sendLoginNotification('failed', {
+        userName: user.full_name,
+        email,
+        reason: 'Account inactive',
+        ...logData
+      });
+      
+      return ResponseFormatter.error(res, 403, APP_SETTINGS.MESSAGES.ACCOUNT_INACTIVE, 'account_status');
+    }
+
+    // Validate password
+    const isValidPassword = await AuthService.validatePassword(password, user.password_hash);
+    
     if (!isValidPassword) {
-      return res.status(200).json({
-        success: false,
-        statusCode: 401,
-        message: 'Invalid email or password',
-        errors: {
-          field: 'credentials'
-        },
-        timestamp: new Date().toISOString()
+      await ActivityLogService.logActivity({
+        ...logData,
+        userId: user.id,
+        activityType: 'LOGIN_FAILED',
+        description: 'Login failed: Invalid password'
       });
+      
+      await EmailNotificationService.sendLoginNotification('failed', {
+        userName: user.full_name,
+        email,
+        reason: 'Invalid password',
+        ...logData
+      });
+      
+      return ResponseFormatter.error(res, 401, APP_SETTINGS.MESSAGES.LOGIN_FAILED, 'credentials');
     }
 
-    // Check platform access for agent role
-    if (platform === 'web' && user.role === 'agent') {
-      return res.status(200).json({
-        success: false,
-        statusCode: 403,
-        message: 'You are not allowed to login on web platform',
-        errors: {
-          field: 'platform_access'
-        },
-        timestamp: new Date().toISOString()
+    // Validate platform access
+    const platformValidation = AuthService.validatePlatformAccess(user.role, platform);
+    
+    if (!platformValidation.valid) {
+      await ActivityLogService.logActivity({
+        ...logData,
+        userId: user.id,
+        activityType: 'LOGIN_FAILED',
+        description: `Login failed: ${platformValidation.reason}`
       });
+      
+      await EmailNotificationService.sendLoginNotification('failed', {
+        userName: user.full_name,
+        email,
+        reason: platformValidation.reason,
+        ...logData
+      });
+      
+      return ResponseFormatter.error(res, 403, `You are not allowed to login on ${platform} platform`, 'platform_access');
     }
 
-    // Check platform access for mobile - only agents allowed
-    if (platform === 'android' && user.role !== 'agent') {
-      return res.status(200).json({
-        success: false,
-        statusCode: 403,
-        message: 'You are not allowed to login on mobile platform',
-        errors: {
-          field: 'platform_access'
-        },
-        timestamp: new Date().toISOString()
-      });
-    }
+    // Generate token
+    const token = AuthService.generateToken(user.id);
 
-    const token = jwt.sign({ id: user.id }, 'your-secret-key', { expiresIn: '30d' });
+    // Log success
+    await ActivityLogService.logActivity({
+      ...logData,
+      userId: user.id,
+      activityType: 'LOGIN_SUCCESS',
+      description: 'User logged in successfully'
+    });
 
-    res.json({
-      success: true,
-      statusCode: 200,
-      message: 'Login successful',
-      data: {
-        user: {
-          id: user.id,
-          name: user.full_name,
-          email: user.email,
-          mobile_number: user.mobile_number,
-          role: user.role,
-          isActive: true
-        },
-        token: {
-          accessToken: token,
-          expiresIn: 2592000  // 30 days in seconds
-        }
+    // Save refresh token
+    await AuthService.saveRefreshToken(user.id, token);
+
+    // Send success notification
+    await EmailNotificationService.sendLoginNotification('success', {
+      userName: user.full_name,
+      email,
+      role: user.role,
+      ...logData
+    });
+
+    // Return response
+    return ResponseFormatter.success(res, 200, APP_SETTINGS.MESSAGES.LOGIN_SUCCESS, {
+      user: {
+        id: user.id,
+        name: user.full_name,
+        email: user.email,
+        mobile_number: user.mobile_number,
+        role: user.role,
+        isActive: true
       },
-      timestamp: new Date().toISOString()
+      token: {
+        accessToken: token,
+        expiresIn: APP_SETTINGS.JWT_EXPIRES_IN_SECONDS
+      }
     });
   } catch (error) {
-    res.status(200).json({
-      success: false,
-      statusCode: 500,
-      message: 'Internal server error',
-      errors: {
-        field: 'server'
-      },
-      timestamp: new Date().toISOString()
-    });
+    console.error('LOGIN ERROR:', error);
+    await ErrorLogService.logError(error, req);
+    return ResponseFormatter.error(res, 500, APP_SETTINGS.MESSAGES.INTERNAL_ERROR, 'server');
   }
 };
 
@@ -400,9 +446,41 @@ const deleteUser = async (req, res) => {
 
 const logoutUser = async (req, res) => {
   try {
-    res.json({ message: 'Logout successful' });
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return ResponseFormatter.error(res, 400, 'Token not provided', 'validation');
+    }
+
+    // Revoke token in refresh_tokens table
+    const result = await pool.query(
+      'UPDATE refresh_tokens SET is_revoked = true, revoked_at = CURRENT_TIMESTAMP, revoked_reason = $1 WHERE token = $2 RETURNING user_id',
+      ['User logged out', token]
+    );
+    console.log('Logout token revocation result:', result);
+
+    if (result.rows.length > 0) {
+      // Log logout activity
+      const { ipAddress, deviceInfo, latitude, longitude } = AuthService.extractRequestInfo(req);
+      const platform = req.body.platform || 'unknown';
+      
+      await ActivityLogService.logActivity({
+        userId: result.rows[0].user_id,
+        activityType: 'LOGOUT',
+        description: 'User logged out successfully',
+        ipAddress,
+        deviceInfo,
+        latitude,
+        longitude,
+        platform
+      });
+    }
+
+    return ResponseFormatter.success(res, 200, APP_SETTINGS.MESSAGES.LOGOUT_SUCCESS);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('LOGOUT ERROR:', error);
+    await ErrorLogService.logError(error, req);
+    return ResponseFormatter.error(res, 500, APP_SETTINGS.MESSAGES.INTERNAL_ERROR, 'server');
   }
 };
 
@@ -512,4 +590,150 @@ const getVillageList = async (req, res) => {
   }
 };
 
-export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getVillageList };
+const updateUserStatus = async (req, res) => {
+  try {
+    const { user_id, status } = req.body;
+
+    if (!user_id || !status) {
+      return ResponseFormatter.error(res, 400, 'User ID and status are required', 'validation');
+    }
+
+    if (!['active', 'inactive'].includes(status.toLowerCase())) {
+      return ResponseFormatter.error(res, 400, 'Status must be active or inactive', 'validation');
+    }
+
+    const result = await pool.query(
+      'UPDATE users SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND deleted_by IS NULL RETURNING id, full_name, email, status',
+      [status.toLowerCase(), user_id]
+    );
+
+    if (result.rows.length === 0) {
+      return ResponseFormatter.error(res, 404, 'User not found', 'user_id');
+    }
+
+    // If user is being set to inactive, revoke all active tokens
+    if (status.toLowerCase() === 'inactive') {
+      await pool.query(
+        'UPDATE refresh_tokens SET is_revoked = true, revoked_at = CURRENT_TIMESTAMP, revoked_reason = $1 WHERE user_id = $2 AND is_revoked = false',
+        ['Account deactivated', user_id]
+      );
+    }
+
+    // Log activity
+    const { ipAddress, deviceInfo, latitude, longitude } = AuthService.extractRequestInfo(req);
+    await ActivityLogService.logActivity({
+      userId: req.user.id,
+      activityType: 'USER_STATUS_UPDATE',
+      description: `User status updated to ${status} for user ID: ${user_id}`,
+      ipAddress,
+      deviceInfo,
+      latitude,
+      longitude,
+      platform: 'web'
+    });
+
+    return ResponseFormatter.success(res, 200, 'User status updated successfully', {
+      user: result.rows[0]
+    });
+  } catch (error) {
+    console.error('UPDATE USER STATUS ERROR:', error);
+    await ErrorLogService.logError(error, req, req.user?.id);
+    return ResponseFormatter.error(res, 500, APP_SETTINGS.MESSAGES.INTERNAL_ERROR, 'server');
+  }
+};
+
+const getUserActivityLog = async (req, res) => {
+  try {
+    const { pagination = {}, filters = {} } = req.body;
+    const { page = 1, limit = 20 } = pagination;
+    const { activity_type_id, date } = filters;
+    const offset = (page - 1) * limit;
+    
+    let query = 'SELECT COUNT(*) as total FROM user_activity_logs ual LEFT JOIN activity_types at ON ual.activity_type = at.display_name WHERE 1=1';
+    let params = [];
+    let paramCount = 0;
+    
+    // Add filters to count query
+    if (activity_type_id) {
+      paramCount++;
+      query += ` AND ual.activity_type = $${paramCount}`;
+      params.push(activity_type_id);
+    }
+    
+    if (date) {
+      paramCount++;
+      query += ` AND DATE(ual.created_at) = $${paramCount}`;
+      params.push(date);
+    }
+    
+    const countResult = await pool.query(query, params);
+    const total = parseInt(countResult.rows[0].total);
+    
+    // Build main query - get color_code from activity_types table
+    let mainQuery = `SELECT 
+      ual.id, ual.user_id, ual.activity_type, ual.activity_description, 
+      ual.ip_address, ual.device_info, ual.platform, 
+      ual.created_at, ual.created_by,
+      at.display_name as display_name,
+      COALESCE(at.color_code, '#6c757d') as color_code
+    FROM user_activity_logs ual
+    LEFT JOIN activity_types at ON ual.activity_type = at.name
+    WHERE 1=1`;
+    
+    let mainParams = [];
+    let mainParamCount = 0;
+    
+    // Add same filters to main query
+    if (activity_type_id) {
+      mainParamCount++;
+      mainQuery += ` AND ual.activity_type = $${mainParamCount}`;
+      mainParams.push(activity_type_id);
+    }
+    
+    if (date) {
+      mainParamCount++;
+      mainQuery += ` AND DATE(ual.created_at) = $${mainParamCount}`;
+      mainParams.push(date);
+    }
+    
+    // Add pagination
+    mainParamCount++;
+    mainQuery += ` ORDER BY ual.created_at DESC LIMIT $${mainParamCount}`;
+    mainParams.push(limit);
+    
+    mainParamCount++;
+    mainQuery += ` OFFSET $${mainParamCount}`;
+    mainParams.push(offset);
+    
+    const result = await pool.query(mainQuery, mainParams);
+    
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: 'User activity logs fetched successfully',
+      data: {
+        logs: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: total,
+          total_pages: Math.ceil(total / limit),
+          has_next: page * limit < total,
+          has_prev: page > 1
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('GET USER ACTIVITY LOG ERROR:', error.message);
+    res.status(200).json({
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch user activity logs',
+      errors: { field: 'server' },
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getVillageList, updateUserStatus, getUserActivityLog };
