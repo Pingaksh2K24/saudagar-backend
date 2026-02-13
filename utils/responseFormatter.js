@@ -1,17 +1,12 @@
 class ResponseFormatter {
   static success(res, statusCode, message, data = null) {
-    const response = {
+    return res.status(200).json({
       success: true,
       statusCode,
       message,
+      data,
       timestamp: new Date().toISOString()
-    };
-
-    if (data) {
-      response.data = data;
-    }
-
-    return res.status(200).json(response);
+    });
   }
 
   static error(res, statusCode, message, field = 'server') {
@@ -24,9 +19,5 @@ class ResponseFormatter {
     });
   }
 }
-
-// Named exports for backward compatibility
-export const successResponse = ResponseFormatter.success;
-export const errorResponse = ResponseFormatter.error;
 
 export default ResponseFormatter;
