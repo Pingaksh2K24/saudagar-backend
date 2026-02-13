@@ -904,7 +904,15 @@ const getTodayResults = async (req, res) => {
       timeZone: 'Asia/Kolkata',
     });
     
-    const currentTime = new Date().toTimeString().slice(0, 8);
+    const currentTime = new Date().toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false
+    });
+    
+    // Send UTC timestamp for frontend conversion
+    const currentUTCTimestamp = new Date().toISOString();
+    
+    console.log('Indian current time:', currentTime);
 
     const result = await pool.query(
       `
@@ -920,16 +928,17 @@ const getTodayResults = async (req, res) => {
         gr.winning_number,
         gr.is_bidding_enabled,
         CASE 
-          WHEN $2 < TO_CHAR(g.open_time, 'HH24:MI:SS') THEN 'Open'
-          WHEN $2 >= TO_CHAR(g.open_time, 'HH24:MI:SS') AND $2 < TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Bidding for Close'
-          WHEN $2 >= TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Close'
+          WHEN TO_CHAR(NOW() AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') < TO_CHAR(g.open_time, 'HH24:MI:SS') THEN 'Open'
+          WHEN TO_CHAR(NOW() AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') >= TO_CHAR(g.open_time, 'HH24:MI:SS') 
+               AND TO_CHAR(NOW() AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') < TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Bidding for Close'
+          WHEN TO_CHAR(NOW() AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') >= TO_CHAR(g.close_time, 'HH24:MI:SS') THEN 'Close'
         END as current_status
       FROM games g
       INNER JOIN game_results gr ON g.id = gr.game_id AND gr.result_date = $1
       WHERE g.deleted_by IS NULL AND g.status = 'active'
       ORDER BY g.id ASC
     `,
-      [today, currentTime]
+      [today]
     );
     
     const formattedResults = result.rows.map(row => {
@@ -959,6 +968,7 @@ const getTodayResults = async (req, res) => {
       data: {
         date: today,
         current_server_time: currentTime,
+        current_utc_timestamp: currentUTCTimestamp,
         results: formattedResults,
       },
       timestamp: new Date().toISOString(),
