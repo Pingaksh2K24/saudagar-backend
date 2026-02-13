@@ -12,17 +12,19 @@ const sendEmail = async (options) => {
     });
     
     const transporter = createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT),
+      host: '74.125.130.108', // Gmail SMTP IPv4 address
+      port: 587,
       secure: false,
-      family: 4, // Force IPv4
       auth: {
         user: process.env.SMTP_EMAIL,
         pass: process.env.SMTP_PASSWORD
       },
       tls: {
         rejectUnauthorized: false
-      }
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 5000,
+      socketTimeout: 10000
     });
 
     const message = {
@@ -32,13 +34,13 @@ const sendEmail = async (options) => {
       html: options.html || options.message
     };
 
-    console.log('Email message:', message);
+    console.log('Email message to:', options.email);
     const info = await transporter.sendMail(message);
     console.log('✅ Email sent successfully:', info.messageId);
     return true;
   } catch (error) {
     console.error('❌ Email send error:', error.message);
-    console.error('Error details:', error);
+    console.error('Error code:', error.code);
     return false;
   }
 };
