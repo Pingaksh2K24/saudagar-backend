@@ -4,6 +4,11 @@ export const APP_SETTINGS = {
   JWT_EXPIRES_IN: '30d',
   JWT_EXPIRES_IN_SECONDS: 2592000, // 30 days
 
+
+  // Is Production Database
+   IS_PROD_MOD:true,
+
+
   // Response Messages
   MESSAGES: {
     LOGIN_SUCCESS: 'Login successful',
