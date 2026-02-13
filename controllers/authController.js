@@ -8,7 +8,7 @@ import AuthService from '../services/AuthService.js';
 import ActivityLogService from '../services/ActivityLogService.js';
 import EmailNotificationService from '../services/EmailNotificationService.js';
 import ErrorLogService from '../services/ErrorLogService.js';
-import ResponseFormatter from '../utils/ResponseFormatter.js';
+import ResponseFormatter from '../utils/responseFormatter.js';
 import APP_SETTINGS from '../config/appSettings.js';
 
 // File upload configuration
