@@ -379,25 +379,42 @@ const processDoublePannaBids = async (
         // Digit-based: check combinations
         const combinations = getDoublePannaCombinations(bidNumber);
         isWinner = combinations.includes(resultNumber);
+        
+        if (isWinner) {
+          const winningAmount = (bid.amount / 9) * bid.rate;
+          await pool.query(
+            `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = true, winning_amount = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [winningAmount, bid.id]
+          );
+        } else {
+          await pool.query(
+            `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        }
       } else if (bidNumber.length === 3) {
         // Direct number: check exact match
         isWinner = bidNumber === resultNumber;
-      }
-
-      if (isWinner) {
-        await pool.query(
-          `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
-           is_winner = true, winning_amount = amount * rate, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [bid.id]
-        );
-      } else {
-        await pool.query(
-          `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
-           is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [bid.id]
-        );
+        
+        if (isWinner) {
+          await pool.query(
+            `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = true, winning_amount = amount * rate, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        } else {
+          await pool.query(
+            `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        }
       }
     }
 
@@ -448,25 +465,42 @@ const processSingleDigitPannaBids = async (
         // Digit-based: check combinations
         const combinations = getSinglePannaCombinations(bidNumber);
         isWinner = combinations.includes(resultNumber);
+        
+        if (isWinner) {
+          const winningAmount = (bid.amount / 12) * bid.rate;
+          await pool.query(
+            `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = true, winning_amount = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [winningAmount, bid.id]
+          );
+        } else {
+          await pool.query(
+            `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        }
       } else if (bidNumber.length === 3) {
         // Direct number: check exact match
         isWinner = bidNumber === resultNumber;
-      }
-
-      if (isWinner) {
-        await pool.query(
-          `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
-           is_winner = true, winning_amount = amount * rate, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [bid.id]
-        );
-      } else {
-        await pool.query(
-          `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
-           is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [bid.id]
-        );
+        
+        if (isWinner) {
+          await pool.query(
+            `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = true, winning_amount = amount * rate, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        } else {
+          await pool.query(
+            `UPDATE bids SET status = 'lost', result_declared_at = CURRENT_TIMESTAMP,
+             is_winner = false, winning_amount = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [bid.id]
+          );
+        }
       }
     }
 
@@ -496,8 +530,26 @@ const processSingleDigitPanna = async (
 
     const bidTypeId = bidTypeResult.rows[0].id;
 
-    // Update winning bids
-    const updateResult = await pool.query(
+    // Update winning bids with digit-based (length 1) - divide by 12
+    const updateDigitResult = await pool.query(
+      `UPDATE bids SET 
+        status = 'won',
+        result_declared_at = CURRENT_TIMESTAMP,
+        is_winner = true,
+        winning_amount = (amount / 12) * rate,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE game_id = $1 
+        AND game_result_id = $2 
+        AND bid_type = $3 
+        AND bid_number = ANY($4::text[]) 
+        AND session_type = $5
+        AND LENGTH(bid_number) = 1
+        AND status IN ('submitted', 'won', 'lost')`,
+      [gameId, gameResultId, bidTypeId, pannaCombinations, sessionType]
+    );
+
+    // Update winning bids with direct number (length 3) - normal calculation
+    const updateDirectResult = await pool.query(
       `UPDATE bids SET 
         status = 'won',
         result_declared_at = CURRENT_TIMESTAMP,
@@ -508,7 +560,8 @@ const processSingleDigitPanna = async (
         AND game_result_id = $2 
         AND bid_type = $3 
         AND bid_number = ANY($4::text[]) 
-        AND session_type = $5 
+        AND session_type = $5
+        AND LENGTH(bid_number) = 3
         AND status IN ('submitted', 'won', 'lost')`,
       [gameId, gameResultId, bidTypeId, pannaCombinations, sessionType]
     );
@@ -531,7 +584,7 @@ const processSingleDigitPanna = async (
     );
 
     console.log(
-      `Updated ${updateResult.rowCount} winning and ${loseResult.rowCount} losing single digit panna bids for ${sessionType}`
+      `Updated ${updateDigitResult.rowCount} digit-based and ${updateDirectResult.rowCount} direct winning bids, ${loseResult.rowCount} losing single digit panna bids for ${sessionType}`
     );
   } catch (error) {
     console.error('PROCESS SINGLE DIGIT PANNA ERROR:', error.message);
@@ -582,6 +635,8 @@ const processJugarBids = async (
       if (!bidNumber.includes('/')) continue;
 
       const [leftDigits, rightDigits] = bidNumber.split('/');
+      const combinationsCount = leftDigits.length * rightDigits.length;
+      const amountPerCombination = bid.amount / combinationsCount;
       let isWinner = false;
 
       // Check all combinations
@@ -598,11 +653,12 @@ const processJugarBids = async (
 
       // Update bid status
       if (isWinner) {
+        const winningAmount = amountPerCombination * bid.rate;
         await pool.query(
           `UPDATE bids SET status = 'won', result_declared_at = CURRENT_TIMESTAMP,
-           is_winner = true, winning_amount = amount * rate, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [bid.id]
+           is_winner = true, winning_amount = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [winningAmount, bid.id]
         );
       } else {
         await pool.query(

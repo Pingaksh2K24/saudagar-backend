@@ -478,13 +478,14 @@ const getAgentKhatabookDetails = async (req, res) => {
       let outstandingAmount = 0;
       const prevBalance = parseFloat(previousBalance.current_balance);
       const creditAmount = parseFloat(khatabook.credit);
+      const debitAmount = parseFloat(khatabook.debit);
       
       if (netAmount >= 0) {
         toTake = netAmount;
         outstandingAmount = prevBalance + toTake - creditAmount;
       } else {
         toGive = Math.abs(netAmount);
-        outstandingAmount = prevBalance - toGive - creditAmount;
+        outstandingAmount = prevBalance - toGive + debitAmount;
       }
 
       agentDetails.push({

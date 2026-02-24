@@ -20,11 +20,15 @@ const sendEmail = async (options) => {
         pass: process.env.SMTP_PASSWORD
       },
       tls: {
-        rejectUnauthorized: false
+        rejectUnauthorized: false,
+        ciphers: 'SSLv3'
       },
-      connectionTimeout: 10000,
-      greetingTimeout: 5000,
-      socketTimeout: 10000
+      family: 4, // Force IPv4
+      connectionTimeout: 15000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+      pool: true,
+      maxConnections: 1
     });
 
     const message = {
@@ -41,6 +45,7 @@ const sendEmail = async (options) => {
   } catch (error) {
     console.error('❌ Email send error:', error.message);
     console.error('Error code:', error.code);
+    console.error('Error stack:', error.stack);
     return false;
   }
 };

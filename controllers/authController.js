@@ -555,7 +555,7 @@ const updateUser = async (req, res) => {
   }
 };
 
-const getVillageList = async (req, res) => {
+const getAgentList = async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
@@ -563,25 +563,25 @@ const getVillageList = async (req, res) => {
         full_name as user_name,
         village
       FROM users 
-      WHERE deleted_by IS NULL AND village IS NOT NULL
+      WHERE deleted_by IS NULL AND role = 'agent'
       ORDER BY village ASC, full_name ASC
     `);
     
     res.status(200).json({
       success: true,
       statusCode: 200,
-      message: 'Village list fetched successfully',
+      message: 'Agent list fetched successfully',
       data: {
-        users: result.rows
+        agents: result.rows
       },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('GET VILLAGE LIST ERROR:', error.message);
+    console.error('GET AGENT LIST ERROR:', error.message);
     res.status(200).json({
       success: false,
       statusCode: 500,
-      message: 'Failed to fetch village list',
+      message: 'Failed to fetch agent list',
       errors: {
         field: 'server'
       },
@@ -736,4 +736,4 @@ const getUserActivityLog = async (req, res) => {
   }
 };
 
-export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getVillageList, updateUserStatus, getUserActivityLog };
+export { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getAgentList, updateUserStatus, getUserActivityLog };

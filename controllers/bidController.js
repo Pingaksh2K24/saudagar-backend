@@ -689,7 +689,7 @@ const fetchBidsWithVillage = async (req, res) => {
     const { page = 1, limit = 10 } = pagination;
 
     const {
-      village,
+      agent_name,
       game_result_id,
       date = new Date().toISOString().split('T')[0], // Default to today
       session_type,
@@ -730,10 +730,10 @@ const fetchBidsWithVillage = async (req, res) => {
     let paramCount = 0;
 
     // Add filters
-    if (village) {
+    if (agent_name) {
       paramCount++;
-      query += ` AND u.village = $${paramCount}`;
-      params.push(village);
+      query += ` AND LOWER(u.full_name) LIKE LOWER($${paramCount})`;
+      params.push(`%${agent_name}%`);
     }
 
     if (game_result_id) {
@@ -815,20 +815,23 @@ const getUserBidsForMobile = async (req, res) => {
   try {
 
     const { user_id } = req.params;
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, status = 'all' } = req.query;
 
     const offset = (page - 1) * limit;
 
     const currentDate = new Date().toISOString().split('T')[0];
 
+    const statusFilter = status !== 'all' ? ' AND b.status = $3' : '';
+    const countParams = status !== 'all' ? [user_id, currentDate, status] : [user_id, currentDate];
+
     // Count total bids
     const countQuery = `
       SELECT COUNT(*) as total
       FROM bids b
-      WHERE b.user_id = $1 AND b.bid_date = $2
+      WHERE b.user_id = $1 AND b.bid_date = $2${statusFilter}
     `;
     
-    const countResult = await pool.query(countQuery, [user_id, currentDate]);
+    const countResult = await pool.query(countQuery, countParams);
     const totalBids = parseInt(countResult.rows[0].total);
 
     let query = `
@@ -840,6 +843,7 @@ const getUserBidsForMobile = async (req, res) => {
         b.bid_type,
         b.bid_number,
         b.amount,
+        b.winning_amount,
         b.session_type,
         b.created_at as created_date,
         b.status,
@@ -848,17 +852,16 @@ const getUserBidsForMobile = async (req, res) => {
       FROM bids b
       JOIN games g ON b.game_id = g.id
       JOIN bid_types bt ON b.bid_type::integer = bt.id
-      WHERE b.user_id = $1 AND b.bid_date = $2
+      WHERE b.user_id = $1 AND b.bid_date = $2${statusFilter}
       ORDER BY b.created_at DESC
-      LIMIT $3 OFFSET $4
+      LIMIT $${status !== 'all' ? 4 : 3} OFFSET $${status !== 'all' ? 5 : 4}
     `;
 
-    const result = await pool.query(query, [
-      user_id,
-      currentDate,
-      limit,
-      offset,
-    ]);
+    const queryParams = status !== 'all' 
+      ? [user_id, currentDate, status, limit, offset]
+      : [user_id, currentDate, limit, offset];
+
+    const result = await pool.query(query, queryParams);
 
     // Simple check if more records exist
     const hasMore = result.rows.length === parseInt(limit);

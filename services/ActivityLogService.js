@@ -18,7 +18,7 @@ class ActivityLogService {
           displayName = activityTypeResult.rows[0].display_name;
         }
       } catch (tableError) {
-        console.log('activity_types table query failed, using fallback');
+        // Silently use fallback if activity_types table doesn't exist
       }
       
       // Truncate fields to prevent VARCHAR constraint errors

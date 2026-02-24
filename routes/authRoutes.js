@@ -1,5 +1,5 @@
 import express from 'express';
-import { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getVillageList, updateUserStatus, getUserActivityLog } from '../controllers/authController.js';
+import { registerUser, loginUser, logoutUser, getAllUserList, getUserDetails, uploadFile, upload, getAllDropdowns, deleteUser, updateUser, getAgentList, updateUserStatus, getUserActivityLog } from '../controllers/authController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -15,6 +15,6 @@ router.post('/get-user-activity-log', protect, getUserActivityLog);
 router.post('/upload', upload.single('file'), uploadFile);
 router.get('/getAllDropdowns', getAllDropdowns);
 router.delete('/users/:id', protect, deleteUser);
-router.get('/village-list', getVillageList);
+router.get('/get-agent-list', getAgentList);
 
 export default router;
